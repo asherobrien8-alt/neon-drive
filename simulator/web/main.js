@@ -1,6 +1,8 @@
 // Echo Mini simulator page: boots sim.wasm (ReChord's real UI) on an in-memory
 // filesystem and drives it with on-screen / keyboard buttons.
 import { WASI, File, Directory, OpenFile, ConsoleStdout, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
+import { bridge } from "wasi-bridge";            // forwards to the shim (JS fallback)
+import * as simJs from "sim-fallback";           // same code via wasm2js, for pages that block WebAssembly
 
 // The shim rejects fd_fdstat_set_flags, which wasi-libc uses for fopen("ab").
 // Support APPEND (the media index is built with appends).
@@ -55,10 +57,19 @@ async function main() {
     ConsoleStdout.lineBuffered((m) => console.log("[sim]", m)),
     ConsoleStdout.lineBuffered((m) => console.warn("[sim]", m)),
     fs,
-  ]);
-  const { instance } = await WebAssembly.instantiate(b64(D.wasm), { wasi_snapshot_preview1: wasi.wasiImport });
-  wasi.initialize(instance);
-  const X = instance.exports;
+  ], { debug: false });
+  let X;
+  try {
+    const { instance } = await WebAssembly.instantiate(b64(D.wasm), { wasi_snapshot_preview1: wasi.wasiImport });
+    wasi.initialize(instance);
+    X = instance.exports;
+  } catch (e) {
+    console.warn("WebAssembly unavailable, using the JS build:", e);
+    bridge.impl = wasi.wasiImport;
+    X = simJs;
+    wasi.inst = { exports: { memory: simJs.memory } };
+    simJs._initialize && simJs._initialize();
+  }
   const n = X.sim_init();
   document.getElementById("tracks").textContent = `${n} demo tracks`;
 

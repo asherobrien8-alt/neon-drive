@@ -4,6 +4,7 @@
   "description": "Echo Mini simulator: ReChord's real UI compiled to WebAssembly",
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",
+    "binaryen": "119.0.0",
     "esbuild": "^0.24.0"
   }
 }

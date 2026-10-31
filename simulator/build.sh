@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build simulator/index.html — one self-contained page (no server needed).
 #   needs: python3, node/npm, and `pip install ziglang==0.13.0` (C -> WebAssembly)
+#   the page embeds the WebAssembly build plus a wasm2js copy for browsers or
+#   pages whose security policy blocks WebAssembly
 #   run firmware/build.sh once first (it prepares the patched ReChord source)
 set -e
 S=$(cd "$(dirname "$0")" && pwd)

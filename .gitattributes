@@ -1,0 +1,4 @@
+*.bat text eol=crlf
+*.IMG binary
+*.bin binary
+STEP-2-THEME/.rechord/active_theme binary

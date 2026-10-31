@@ -1,0 +1,266 @@
+diff --git a/firmware/theme/tests/run_tests.sh b/firmware/theme/tests/run_tests.sh
+index c28eef9..c8b0da4 100644
+--- a/firmware/theme/tests/run_tests.sh
++++ b/firmware/theme/tests/run_tests.sh
+@@ -18,7 +18,8 @@ $CC $CFLAGS -I.. -o .work/test_theme_pkg \
+ 
+ $CC $CFLAGS -I.. -o .work/test_theme_runtime \
+     test_theme_runtime.c ../theme.c ../themes_builtin.c ../theme_file.c \
+-    ../theme_pkg.c ../theme_runtime.c ../theme_assets.c ../theme_skin.c
++    ../theme_pkg.c ../theme_runtime.c ../theme_assets.c ../theme_skin.c \
++    ../../drivers/font.c ../../drivers/font8x8.c
+ .work/test_theme_runtime
+ 
+ echo "ALL THEME TESTS PASSED"
+diff --git a/firmware/theme/theme_skin.c b/firmware/theme/theme_skin.c
+index 7098f23..5f11683 100644
+--- a/firmware/theme/theme_skin.c
++++ b/firmware/theme/theme_skin.c
+@@ -15,6 +15,7 @@
+ #include "theme_pkg.h"
+ #include "theme_assets.h"
+ #include "../drivers/display.h"
++#include "../drivers/font.h"
+ 
+ #ifdef RECHORD_AP_BUILD
+ #include "../services/fs.h"
+@@ -981,6 +982,8 @@ static int action_from_word(const char *s)
+         return THEME_SKIN_PLAYER;
+     if (key_eq(s, "settings"))
+         return THEME_SKIN_SETTINGS;
++    if (key_eq(s, "menu"))              /* Neon Drive: open the classic root menu */
++        return THEME_SKIN_BACK;
+     return THEME_SKIN_NONE;
+ }
+ 
+@@ -1453,6 +1456,53 @@ static const char *row_value(int idx, char *buf, int cap)
+     return 0;
+ }
+ 
++/* Neon Drive extension: optional list styling. Every field < 0 means "use
++ * the stock behaviour", so packages that do not set these keys render
++ * exactly as before. Filled from the list section just before draw_list(). */
++typedef struct {
++    int fg, bg, sel_fg, sel_bg, val_fg, sel_x, sel_w, mark, scale;
++    int bg_none;
++} skin_list_style_t;
++static skin_list_style_t s_ls = { -1, -1, -1, -1, -1, -1, -1, -1, 1, 0 };
++
++/* Text at 1x..4x. `transparent` skips the cell background so text can sit
++ * on gradients. 1x opaque falls through to the stock driver path. */
++static void skin_text(int x, int y, const char *s, uint16_t fg, uint16_t bg,
++                      int scale, int transparent)
++{
++    int pen = x;
++
++    if (scale < 1) scale = 1;
++    if (scale > 4) scale = 4;
++    if (scale == 1 && !transparent) {
++        display_draw_text(x, y, s, fg, bg);
++        return;
++    }
++    for (; *s; s++, pen += SKIN_FONT_W * scale) {
++        const uint8_t *g = font_glyph((uint8_t)*s);
++        int row;
++
++        if (pen >= THEME_LAYOUT_MAX_W)
++            break;
++        if (!transparent)
++            display_fill_rect(pen, y, pen + SKIN_FONT_W * scale - 1,
++                              y + 8 * scale - 1, bg);
++        for (row = 0; row < 8; row++) {
++            int col = 0;
++            while (col < 8) {
++                int start;
++                if (!(g[row] & (0x80 >> col))) { col++; continue; }
++                start = col;
++                while (col < 8 && (g[row] & (0x80 >> col)))
++                    col++;
++                display_fill_rect(pen + start * scale, y + row * scale,
++                                  pen + col * scale - 1,
++                                  y + row * scale + scale - 1, fg);
++            }
++        }
++    }
++}
++
+ static void draw_list(int sel, int top)
+ {
+     const theme_layout_t *l = theme_layout();
+@@ -1484,26 +1534,36 @@ static void draw_list(int sel, int top)
+             const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
+             const char *value = row_value(idx, vbuf, (int)sizeof vbuf);
+ 
+-            if (idx == sel) {
+-                display_fill_rect(0, yy, THEME_LAYOUT_MAX_W - 1, yy + h - 1,
+-                                  theme_get()->text);
+-                display_draw_text(x, yy + 1, label,
+-                                  theme_get()->background, theme_get()->text);
+-            } else {
+-                display_draw_text(x, yy + 1, label,
+-                                  theme_get()->text, theme_get()->background);
++            uint16_t fg  = s_ls.fg >= 0 ? (uint16_t)s_ls.fg : theme_get()->text;
++            uint16_t bg  = s_ls.bg >= 0 ? (uint16_t)s_ls.bg : theme_get()->background;
++            uint16_t sfg = s_ls.sel_fg >= 0 ? (uint16_t)s_ls.sel_fg : theme_get()->background;
++            uint16_t sbg = s_ls.sel_bg >= 0 ? (uint16_t)s_ls.sel_bg : theme_get()->text;
++            uint16_t vfg = s_ls.val_fg >= 0 ? (uint16_t)s_ls.val_fg : theme_get()->text_dim;
++            int sx0 = s_ls.sel_x >= 0 ? s_ls.sel_x : 0;
++            int sx1 = s_ls.sel_w > 0 ? sx0 + s_ls.sel_w - 1 : THEME_LAYOUT_MAX_W - 1;
++            int ty = yy + (h - 8 * s_ls.scale) / 2;
++            int on = (idx == sel);
++
++            if (s_ls.fg < 0 && s_ls.sel_bg < 0 && s_ls.scale == 1 &&
++                !s_ls.bg_none)
++                ty = yy + 1;    /* stock geometry, byte-identical */
++            if (on) {
++                display_fill_rect(sx0, yy, sx1, yy + h - 1, sbg);
++                if (s_ls.mark >= 0)
++                    display_fill_rect(sx0, yy, sx0 + 2, yy + h - 1,
++                                      (uint16_t)s_ls.mark);
+             }
++            skin_text(x, ty, label, on ? sfg : fg, on ? sbg : bg,
++                      s_ls.scale, !on && s_ls.bg_none);
+             if (value != 0 && value[0] != '\0') {
+                 int vw = (int)strlen(value) * SKIN_FONT_W;
+-                int vx = THEME_LAYOUT_MAX_W - l->pad - vw;
++                int vx = (s_ls.sel_w > 0 ? sx1 - 3 : THEME_LAYOUT_MAX_W - l->pad) - vw;
+ 
+                 if (vx < x + 8)
+                     vx = x + 8;
+-                display_draw_text(vx, yy + 1, value,
+-                                  idx == sel ? theme_get()->background
+-                                             : theme_get()->text_dim,
+-                                  idx == sel ? theme_get()->text
+-                                             : theme_get()->background);
++                skin_text(vx, ty + (s_ls.scale > 1 ? (8 * s_ls.scale - 8) / 2 : 0),
++                          value, on ? sfg : vfg, on ? sbg : bg, 1,
++                          !on && s_ls.bg_none);
+             }
+         }
+         return;
+@@ -1535,14 +1595,20 @@ static void draw_list(int sel, int top)
+             char lbuf[64];
+             const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
+ 
++            uint16_t fg  = s_ls.fg >= 0 ? (uint16_t)s_ls.fg : theme_get()->text;
++            uint16_t bg  = s_ls.bg >= 0 ? (uint16_t)s_ls.bg : theme_get()->background;
++            uint16_t sfg = s_ls.sel_fg >= 0 ? (uint16_t)s_ls.sel_fg : theme_get()->background;
++            uint16_t sbg = s_ls.sel_bg >= 0 ? (uint16_t)s_ls.sel_bg : theme_get()->text;
++
+             if (idx == sel) {
+                 display_fill_rect(x - 4, y - 1, x + widths[i] + 3,
+-                                  y + h - 2, theme_get()->text);
+-                display_draw_text(x, y + 1, label,
+-                                  theme_get()->background, theme_get()->text);
++                                  y + h - 2, sbg);
++                if (s_ls.mark >= 0)
++                    display_fill_rect(x - 4, y + h - 3, x + widths[i] + 3,
++                                      y + h - 2, (uint16_t)s_ls.mark);
++                skin_text(x, y + 1, label, sfg, sbg, 1, 0);
+             } else {
+-                display_draw_text(x, y + 1, label,
+-                                  theme_get()->text, theme_get()->background);
++                skin_text(x, y + 1, label, fg, bg, 1, s_ls.bg_none);
+             }
+             x += widths[i] + 16;
+         }
+@@ -1651,9 +1717,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+         ctx->ah = ah;
+         x = eval_int(prop(sec, "x"), ctx, 0);
+         y = eval_int(prop(sec, "y"), ctx, 0);
+-        display_bitmap1(x, y, aw, ah, stride, bits,
+-                        color_of(prop(sec, "color"), ctx, theme_get()->text),
+-                        color_of(prop(sec, "bg"), ctx, theme_get()->background));
++        {
++            const char *bgv = prop(sec, "bg");
++            int flip = eval_int(prop(sec, "flip"), ctx, 0);
++            uint16_t fg = color_of(prop(sec, "color"), ctx, theme_get()->text);
++            int r, c;
++
++            if (!flip && !(bgv != 0 && key_eq(bgv, "none"))) {
++                display_bitmap1(x, y, aw, ah, stride, bits, fg,
++                                color_of(bgv, ctx, theme_get()->background));
++                return;
++            }
++            if (!(bgv != 0 && key_eq(bgv, "none")))
++                display_fill_rect(x, y, x + aw - 1, y + ah - 1,
++                                  color_of(bgv, ctx, theme_get()->background));
++            /* Neon Drive extension: transparent and/or mirrored blit,
++             * drawn as horizontal runs of set bits. */
++            for (r = 0; r < ah; r++) {
++                c = 0;
++                while (c < aw) {
++                    int sc0 = flip ? aw - 1 - c : c, start;
++                    if (!(bits[r * stride + (sc0 >> 3)] & (0x80u >> (sc0 & 7)))) {
++                        c++;
++                        continue;
++                    }
++                    start = c;
++                    while (c < aw) {
++                        int sc1 = flip ? aw - 1 - c : c;
++                        if (!(bits[r * stride + (sc1 >> 3)] & (0x80u >> (sc1 & 7))))
++                            break;
++                        c++;
++                    }
++                    display_fill_rect(x + start, y + r, x + c - 1, y + r, fg);
++                }
++            }
++        }
+         return;
+     }
+ 
+@@ -1681,12 +1779,19 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+             /* Optional right alignment: `x` is the right edge. The mockups
+              * need it for counters, volume and i/N (the engine has no text
+              * measuring helper for themes). */
++            int sc = eval_int(prop(sec, "scale"), ctx, 1);
++            const char *bgv = prop(sec, "bg");
++
++            if (sc < 1) sc = 1;
+             if (al != 0 && key_eq(al, "right"))
+-                x -= (int)strlen(text) * SKIN_FONT_W;
++                x -= (int)strlen(text) * SKIN_FONT_W * sc;
++            else if (al != 0 && key_eq(al, "center"))
++                x -= (int)strlen(text) * SKIN_FONT_W * sc / 2;
++            skin_text(x, y, text,
++                      color_of(prop(sec, "color"), ctx, theme_get()->text),
++                      color_of(bgv, ctx, theme_get()->background), sc,
++                      bgv != 0 && key_eq(bgv, "none"));
+         }
+-        display_draw_text(x, y, text,
+-                          color_of(prop(sec, "color"), ctx, theme_get()->text),
+-                          color_of(prop(sec, "bg"), ctx, theme_get()->background));
+         return;
+     }
+ 
+@@ -1719,6 +1824,18 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+     }
+ 
+     if (key_eq(type, "list")) {
++        const char *b = prop(sec, "bg");
++        s_ls.fg     = prop(sec, "fg")     ? color_of(prop(sec, "fg"), ctx, 0) : -1;
++        s_ls.bg_none = b != 0 && key_eq(b, "none");
++        s_ls.bg     = (b && !s_ls.bg_none) ? color_of(b, ctx, 0) : -1;
++        s_ls.sel_fg = prop(sec, "sel_fg") ? color_of(prop(sec, "sel_fg"), ctx, 0) : -1;
++        s_ls.sel_bg = prop(sec, "sel_bg") ? color_of(prop(sec, "sel_bg"), ctx, 0) : -1;
++        s_ls.val_fg = prop(sec, "val_fg") ? color_of(prop(sec, "val_fg"), ctx, 0) : -1;
++        s_ls.mark   = prop(sec, "mark")   ? color_of(prop(sec, "mark"), ctx, 0) : -1;
++        s_ls.sel_x  = prop(sec, "sel_x")  ? eval_int(prop(sec, "sel_x"), ctx, 0) : -1;
++        s_ls.sel_w  = prop(sec, "sel_w")  ? eval_int(prop(sec, "sel_w"), ctx, 0) : -1;
++        s_ls.scale  = prop(sec, "scale")  ? eval_int(prop(sec, "scale"), ctx, 1) : 1;
++        if (s_ls.scale < 1) s_ls.scale = 1;
+         draw_list(sel, ctx->top);
+         return;
+     }
+diff --git a/firmware/ui/tests/run_tests.sh b/firmware/ui/tests/run_tests.sh
+index 3789e62..6ed0345 100644
+--- a/firmware/ui/tests/run_tests.sh
++++ b/firmware/ui/tests/run_tests.sh
+@@ -29,6 +29,7 @@ $CC $CFLAGS -I.. -I../.. -I../../services -I../../player -o .work/ui_tests \
+     ../../theme/theme.c ../../theme/themes_builtin.c ../../theme/theme_pkg.c \
+     ../../theme/theme_file.c ../../theme/theme_runtime.c \
+     ../../theme/theme_assets.c ../../theme/theme_skin.c \
++    ../../drivers/font.c ../../drivers/font8x8.c \
+     mock_display.c mock_services.c mock_eq.c -lm
+ 
+ .work/ui_tests

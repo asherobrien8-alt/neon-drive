@@ -1,3 +1,6 @@
 .build/
 firmware/.rechord-src/
 __pycache__/
+.build/
+node_modules/
+package-lock.json

@@ -1,3 +1,282 @@
+diff --git a/firmware/ap.mk b/firmware/ap.mk
+index 00dbdb6..47fd08d 100644
+--- a/firmware/ap.mk
++++ b/firmware/ap.mk
+@@ -93,6 +93,8 @@ AP_UI_SRCS := \
+   firmware/ui/screens/settings_screen.c \
+   firmware/ui/screens/library_screen.c \
+   firmware/ui/screens/library_cat_screen.c \
++  firmware/ui/screens/search_screen.c \
++  firmware/ui/screens/az_screen.c \
+   firmware/ui/screens/skin_screen.c \
+   firmware/ui/screens/quick_screen.c \
+   firmware/ui/screens/eq_screen.c \
+diff --git a/firmware/services/media_query.c b/firmware/services/media_query.c
+index f7fae68..f47d4b6 100644
+--- a/firmware/services/media_query.c
++++ b/firmware/services/media_query.c
+@@ -440,3 +440,121 @@ void mq_done(void)
+     s_cap = 0;
+     s_truncated = 0;
+ }
++
++/* ---- Neon Drive: Search + A-Z jump ------------------------------------- */
++
++static int ci_contains(const char *hay, const char *needle)
++{
++    size_t i, n = strlen(needle);
++
++    if (n == 0u)
++        return 0;
++    for (; *hay != '\0'; hay++) {
++        for (i = 0; i < n; i++) {
++            unsigned char a = (unsigned char)hay[i];
++            unsigned char b = (unsigned char)needle[i];
++
++            if (a == '\0')
++                return 0;
++            if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + 32);
++            if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + 32);
++            if (a != b)
++                break;
++        }
++        if (i == n)
++            return 1;
++    }
++    return 0;
++}
++
++int mq_search_init(const char *query)
++{
++    unsigned total, i;
++
++    mq_done();
++    mq_setup_lists(&s_cap);
++    if (s_idx == 0)
++        return FS_ERR_IO;
++    s_count = 0;
++    s_truncated = 0;
++    if (query == 0 || query[0] == '\0')
++        return 0;
++    if (media_db_open() != FS_OK) {
++        mq_done();
++        return FS_ERR_OPEN;
++    }
++    total = media_db_count();
++    for (i = 0; i < total; i++) {
++        media_rec_t rec;
++
++        if (media_db_get(i, &rec) != FS_OK)
++            break;
++        if (s_pump != 0 && (i & (MQ_PUMP_EVERY - 1u)) == 0u)
++            s_pump();
++        if (!ci_contains(rec.title, query) && !ci_contains(rec.artist, query) &&
++            !ci_contains(rec.album, query))
++            continue;
++        if (s_count >= s_cap) {
++            s_truncated = 1;
++            break;
++        }
++        s_idx[s_count] = (uint16_t)i;
++        mq_key_set(&s_key[s_count], rec.track_no, rec.title);
++        s_count++;
++    }
++    mq_sort_items();
++    return 0;
++}
++
++const char *mq_sort_key(unsigned i)
++{
++    if (s_key == 0 || s_idx == 0 || i >= s_count)
++        return 0;
++    return s_key[i].text;
++}
++
++char mq_initial_of(const char *s)
++{
++    unsigned char c;
++
++    if (s == 0)
++        return '#';
++    c = (unsigned char)s[0];
++    if (c >= 'a' && c <= 'z')
++        c = (unsigned char)(c - 32);
++    return (c >= 'A' && c <= 'Z') ? (char)c : '#';
++}
++
++static const char *mq_row_text(unsigned i)
++{
++    return s_key != 0 ? mq_sort_key(i) : mq_names_get(i);
++}
++
++int mq_initial_index(char letter)
++{
++    unsigned i;
++    int after = -1;
++
++    if (s_count == 0u)
++        return -1;
++    for (i = 0; i < s_count; i++) {
++        char c = mq_initial_of(mq_row_text(i));
++
++        if (c == letter)
++            return (int)i;
++        /* '#' sorts first; past the letter = the next one alphabetically */
++        if (after < 0 && letter != '#' && c != '#' && c > letter)
++            after = (int)i;
++    }
++    return after >= 0 ? after : (letter == '#' ? 0 : (int)s_count - 1);
++}
++
++unsigned mq_initial_count(char letter)
++{
++    unsigned i, n = 0;
++
++    for (i = 0; i < s_count; i++)
++        if (mq_initial_of(mq_row_text(i)) == letter)
++            n++;
++    return n;
++}
+diff --git a/firmware/services/media_query.h b/firmware/services/media_query.h
+index 2c0d911..b42c58f 100644
+--- a/firmware/services/media_query.h
++++ b/firmware/services/media_query.h
+@@ -71,6 +71,28 @@ int mq_folder_init_start(const char *prefix, const char *target,
+ /* Release the scratch region and drop the current query. */
+ void mq_done(void);
+ 
++/* ---- Neon Drive: Search + A-Z jump ------------------------------------- */
++
++/* Filter mode: every record whose title, artist or album CONTAINS `query`
++ * (ASCII case-insensitive), sorted by title. Same scratch/RAM model as
++ * mq_filter_init(); read the results with mq_filter_count()/mq_filter_get().
++ * An empty query matches nothing. */
++int mq_search_init(const char *query);
++
++/* Sort text of filtered row i (the title for All Songs / search results),
++ * straight from RAM. NULL when not in filter mode or out of range. */
++const char *mq_sort_key(unsigned i);
++
++/* A-Z on the CURRENT list (names mode, or filter mode with title keys):
++ * letter is 'A'..'Z' or '#' (anything that is not a letter), taken from
++ * the text exactly as the list sorts it. mq_initial_index() returns the first row with
++ * that initial, or the first row after it alphabetically, or -1 when the
++ * list is empty; mq_initial_count() counts rows with exactly that initial. */
++int      mq_initial_index(char letter);
++unsigned mq_initial_count(char letter);
++/* Initial of an arbitrary string, using the same rule ('A'..'Z' or '#'). */
++char     mq_initial_of(const char *s);
++
+ /* Optional pump called every few index records while a query scans the index.
+  * The scan is a long blocking loop of media_db_get() calls; without pumping,
+  * the player stops refilling the PCM ring and an underrun cuts the audio (at
+diff --git a/firmware/services/tests/run_tests.sh b/firmware/services/tests/run_tests.sh
+index 7e21896..64ffa8c 100644
+--- a/firmware/services/tests/run_tests.sh
++++ b/firmware/services/tests/run_tests.sh
+@@ -38,6 +38,8 @@ $CC $CFLAGS -I.. -I../.. -o .work/test_art_pack test_art_pack.c ../art_pack.c ..
+ .work/test_scratch
+ .work/test_media_db
+ .work/test_media_query
++$CC $CFLAGS -I.. -o .work/test_search_az test_search_az.c ../media_db.c ../media_query.c ../scratch.c ../fs_host.c
++.work/test_search_az
+ .work/test_media_scan
+ .work/test_eq_profile
+ .work/test_art_pack
+diff --git a/firmware/services/tests/test_search_az.c b/firmware/services/tests/test_search_az.c
+new file mode 100644
+index 0000000..24d12f8
+--- /dev/null
++++ b/firmware/services/tests/test_search_az.c
+@@ -0,0 +1,88 @@
++/*
++ * test_search_az.c — Neon Drive: mq_search_init + A-Z helpers.
++ */
++#include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++
++#include "fs.h"
++#include "fs_host.h"
++#include "media_db.h"
++#include "media_query.h"
++#include "scratch.h"
++
++static int s_checks, s_failures;
++#define CHECK(c) do { s_checks++; if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); s_failures++; } } while (0)
++
++static void add(const char *title, const char *artist, const char *album)
++{
++    media_rec_t r;
++
++    memset(&r, 0, sizeof r);
++    snprintf(r.path, sizeof r.path, "Internal/Music/%s.flac", title);
++    snprintf(r.title, sizeof r.title, "%s", title);
++    snprintf(r.artist, sizeof r.artist, "%s", artist);
++    snprintf(r.album, sizeof r.album, "%s", album);
++    (void)media_db_add(&r);
++}
++
++int main(void)
++{
++    static uint8_t buf[SCRATCH_BYTES];
++    media_rec_t r;
++
++    printf("== media_query: search + A-Z ==\n");
++    (void)mkdir(".work", 0777);
++    (void)mkdir(".work/Internal", 0777);
++    (void)mkdir(".work/Internal/.rechord", 0777);
++    fs_host_set_root(".work");
++    (void)remove(".work/Internal/.rechord/INDEX.A");
++    (void)remove(".work/Internal/.rechord/INDEX.B");
++
++    CHECK(media_db_begin(buf, (uint32_t)sizeof buf) == FS_OK);
++    add("Nightcall", "Kavinsky", "OutRun");
++    add("Midnight City", "M83", "Hurry Up");
++    add("Mid-Air Blade", "Chrome Samurai", "Steel");
++    add("Roadgame", "Kavinsky", "OutRun");
++    add("the Driver", "Midnight Katana", "Neon");
++    add("99 Lights", "Lazerhawk", "Redline");
++    CHECK(media_db_end() == FS_OK);
++
++    /* search: title OR artist OR album, case-insensitive, title-sorted */
++    CHECK(mq_search_init("mid") == 0);
++    CHECK(mq_filter_count() == 3);              /* 2 titles + Midnight Katana */
++    CHECK(mq_filter_get(0, &r) == FS_OK && strcmp(r.title, "Mid-Air Blade") == 0);
++    CHECK(strcmp(mq_sort_key(1), "Midnight City") == 0);
++    CHECK(mq_search_init("OUTRUN") == 0 && mq_filter_count() == 2);
++    CHECK(mq_search_init("zzz") == 0 && mq_filter_count() == 0);
++    CHECK(mq_search_init("") == 0 && mq_filter_count() == 0);
++
++    /* initials follow the sort text (no "The" skipping), digits are '#' */
++    CHECK(mq_initial_of("The Midnight") == 'T');
++    CHECK(mq_initial_of("the Driver") == 'T');
++    CHECK(mq_initial_of("99 Lights") == '#');
++    CHECK(mq_initial_of("kavinsky") == 'K');
++    CHECK(mq_initial_of("Theory") == 'T');
++
++    /* A-Z on All Songs (sorted: 99, Mid-Air, Midnight, Nightcall, Road, the Driver) */
++    CHECK(mq_filter_init(MQ_ALL, 0) == 0);
++    CHECK(mq_initial_count('M') == 2);
++    CHECK(mq_initial_index('#') == 0);
++    CHECK(mq_initial_index('M') == 1);
++    CHECK(mq_initial_index('N') == 3);
++    CHECK(mq_initial_index('O') == 4);          /* no O: next letter (R) */
++    CHECK(mq_initial_index('T') == 5);          /* "the Driver" sorts as t */
++    CHECK(mq_initial_index('D') == 1);          /* no D: next letter that exists (M) */
++    CHECK(mq_initial_index('Z') == 5);          /* past the end: last row */
++
++    /* A-Z on names */
++    CHECK(mq_names_init(MQ_ARTIST) == 0);
++    CHECK(mq_initial_count('K') == 1);
++    CHECK(mq_initial_index('L') >= 0);
++    CHECK(strcmp(mq_names_get((unsigned)mq_initial_index('L')), "Lazerhawk") == 0);
++    mq_done();
++    CHECK(mq_initial_index('A') == -1);         /* empty list */
++
++    printf("%d checks, %d failures\n", s_checks, s_failures);
++    return s_failures != 0;
++}
 diff --git a/firmware/theme/tests/run_tests.sh b/firmware/theme/tests/run_tests.sh
 index c28eef9..c8b0da4 100644
 --- a/firmware/theme/tests/run_tests.sh
@@ -252,6 +531,677 @@ index 7098f23..5f11683 100644
          draw_list(sel, ctx->top);
          return;
      }
+diff --git a/firmware/ui/screens/az_screen.c b/firmware/ui/screens/az_screen.c
+new file mode 100644
+index 0000000..a65556f
+--- /dev/null
++++ b/firmware/ui/screens/az_screen.c
+@@ -0,0 +1,142 @@
++/*
++ * az_screen.c — A-Z jump overlay (Neon Drive).
++ *
++ * Opened by holding PLAY on a long list (category names, All Songs, search
++ * results). A 7x4 letter grid: VOL moves the letter, PLAY jumps the list to
++ * the first row with that initial, BACK cancels. The right panel shows the
++ * letter big and how many rows start with it, so you never jump into nothing
++ * by surprise. All list knowledge comes from media_query (mq_initial_*), so
++ * this screen only draws and routes keys. Colours come from the active theme.
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "screens.h"
++#include "../theme.h"
++#include "../internal/hal.h"
++#include "../../drivers/font.h"
++#include "../../services/media_query.h"
++
++static const char k_letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#";
++#define AZ_N    27
++#define AZ_COLS 7
++
++static int  s_sel;
++static char s_noun[12];
++static void (*s_jump)(int row);
++static int  s_armed;      /* PLAY went down on THIS screen */
++
++void ui_text_scaled(int x, int y, const char *s, int scale, uint16_t fg)
++{
++    for (; *s != '\0'; s++, x += 8 * scale) {
++        const uint8_t *g = font_glyph((uint8_t)*s);
++        int r, c;
++
++        for (r = 0; r < 8; r++)
++            for (c = 0; c < 8; c++)
++                if (g[r] & (0x80u >> c))
++                    display_fill_rect(x + c * scale, y + r * scale,
++                                      x + c * scale + scale - 1,
++                                      y + r * scale + scale - 1, fg);
++    }
++}
++
++void az_screen_open(const char *noun, const char *current, void (*jump)(int row))
++{
++    char cur = mq_initial_of(current);
++    const char *p = strchr(k_letters, cur);
++
++    s_sel = p != 0 ? (int)(p - k_letters) : 0;
++    snprintf(s_noun, sizeof s_noun, "%s", noun != 0 ? noun : "ROWS");
++    s_jump = jump;
++    s_armed = 0;
++    ui_push_screen(&az_screen);
++}
++
++static void az_draw(void)
++{
++    char buf[24];
++    char letter[2] = { k_letters[s_sel], '\0' };
++    unsigned n = mq_initial_count(k_letters[s_sel]);
++    int i;
++
++    display_clear(THEME_COLOR_BG);
++    display_fill_rect(0, 0, 2, 13, THEME_COLOR_WARN);
++    snprintf(buf, sizeof buf, "A-Z JUMP / %s", s_noun);
++    display_draw_text(8, 4, buf, THEME_COLOR_ACCENT, THEME_COLOR_BG);
++    display_fill_rect(0, 16, DISPLAY_W - 1, 16, THEME_COLOR_DIM);
++
++    for (i = 0; i < AZ_N; i++) {
++        int x = 8 + (i % AZ_COLS) * 28;
++        int y = 22 + (i / AZ_COLS) * 26;
++        char ch[2] = { k_letters[i], '\0' };
++        int has = mq_initial_count(k_letters[i]) > 0u;
++        uint16_t bg = (i == s_sel) ? THEME_COLOR_WARN : THEME_COLOR_SELECT_BG;
++        uint16_t fg = (i == s_sel) ? THEME_COLOR_BG
++                                   : (has ? THEME_COLOR_FG : THEME_COLOR_DIM);
++
++        display_fill_rect(x, y, x + 25, y + 23, bg);
++        ui_text_scaled(x + 5, y + 4, ch, 2, fg);
++    }
++
++    ui_text_scaled(232, 26, letter, 6, n ? THEME_COLOR_ACCENT : THEME_COLOR_DIM);
++    if (n == 1u && s_noun[0] != '\0' && s_noun[strlen(s_noun) - 1] == 'S')
++        snprintf(buf, sizeof buf, "1 %.*s", (int)strlen(s_noun) - 1, s_noun);
++    else if (n)
++        snprintf(buf, sizeof buf, "%u %s", n, s_noun);
++    else
++        snprintf(buf, sizeof buf, "NONE - NEXT");
++    display_draw_text(264 - (int)strlen(buf) * 4, 86, buf,
++                      n ? THEME_COLOR_FG : THEME_COLOR_DIM, THEME_COLOR_BG);
++    display_draw_text(224, 112, "VOL  LETTER", THEME_COLOR_DIM, THEME_COLOR_BG);
++    display_draw_text(224, 124, "PLAY JUMP", THEME_COLOR_DIM, THEME_COLOR_BG);
++    display_draw_text(224, 136, "BACK CANCEL", THEME_COLOR_DIM, THEME_COLOR_BG);
++}
++
++static void az_handle_event(const input_event_t *ev)
++{
++    switch (ev->type) {
++    case KEY_UP:
++    case KEY_DOWN:
++        if (ev->kind != INPUT_PRESS && ev->kind != INPUT_REPEAT)
++            return;
++        s_sel += (ev->type == KEY_DOWN) ? 1 : -1;
++        if (s_sel < 0) s_sel = AZ_N - 1;
++        if (s_sel >= AZ_N) s_sel = 0;
++        ui_invalidate_all();
++        break;
++    case KEY_SELECT:
++        /* the hold that opened us ends here: only presses seen here count */
++        if (ev->kind == INPUT_PRESS) {
++            s_armed = 1;
++            return;
++        }
++        if (ev->kind != INPUT_RELEASE || !s_armed || ev->long_press)
++            return;
++        s_armed = 0;
++        {
++            int row = mq_initial_index(k_letters[s_sel]);
++            void (*jump)(int) = s_jump;
++
++            ui_pop_screen();
++            if (jump != 0 && row >= 0)
++                jump(row);
++        }
++        break;
++    case KEY_BACK:
++        if (ev->kind == INPUT_PRESS)
++            ui_pop_screen();
++        break;
++    default:
++        break;
++    }
++}
++
++const ui_screen_t az_screen = {
++    "a-z",
++    NULL,
++    NULL,
++    az_draw,
++    az_handle_event,
++    0,
++};
+diff --git a/firmware/ui/screens/library_cat_screen.c b/firmware/ui/screens/library_cat_screen.c
+index ca6f078..b66fe98 100644
+--- a/firmware/ui/screens/library_cat_screen.c
++++ b/firmware/ui/screens/library_cat_screen.c
+@@ -29,7 +29,7 @@ static int cat_rows(void)
+ 
+ typedef struct {
+     int  cat;
+-    int  mode;                 /* 0 = names, 1 = songs */
++    int  mode;                 /* 0 = names, 1 = songs, 2 = search results */
+     int  cursor;
+     int  top;
+     char value[24];            /* the chosen name (songs mode) */
+@@ -37,6 +37,7 @@ typedef struct {
+ 
+ static cat_state_t s_cat;
+ static int s_use_skin;
++static int s_armed;        /* Neon Drive: PLAY went down on THIS screen */
+ 
+ static unsigned cat_total(void);
+ 
+@@ -86,17 +87,35 @@ void library_cat_open(int cat)
+         (void)mq_names_init(s_cat.cat);
+ }
+ 
+-static unsigned cat_total(void)
++/* Neon Drive: search results reuse the song list (title-sorted). */
++void library_cat_open_search(const char *query)
+ {
+-    return s_cat.mode ? mq_filter_count() : mq_names_count();
++    s_cat.cat = MQ_ALL;
++    s_cat.mode = 2;
++    s_cat.cursor = 0;
++    s_cat.top = 0;
++    snprintf(s_cat.value, sizeof s_cat.value, "%s", query != 0 ? query : "");
+ }
+ 
+-static void cat_on_enter(void)
++static void cat_query(void)
+ {
+-    if (s_cat.mode)
++    if (s_cat.mode == 2)
++        (void)mq_search_init(s_cat.value);
++    else if (s_cat.mode)
+         (void)mq_filter_init(s_cat.cat, s_cat.value[0] ? s_cat.value : 0);
+     else
+         (void)mq_names_init(s_cat.cat);
++}
++
++static unsigned cat_total(void)
++{
++    return s_cat.mode ? mq_filter_count() : mq_names_count();
++}
++
++static void cat_on_enter(void)
++{
++    s_armed = 0;
++    cat_query();
+     s_use_skin = theme_ui_load(THEME_UI_LIBRARY_CAT);
+     s_source.count = (int)cat_total();
+     if (s_use_skin)
+@@ -119,7 +138,9 @@ static void cat_draw(void)
+     if (s_use_skin) {
+         theme_skin_state_t st;
+ 
+-        if (s_cat.mode)
++        if (s_cat.mode == 2)
++            snprintf(title, sizeof title, "Search / %s", s_cat.value);
++        else if (s_cat.mode)
+             snprintf(title, sizeof title, "%s / %s",
+                      mq_category_name(s_cat.cat), s_cat.value);
+         else
+@@ -134,7 +155,9 @@ static void cat_draw(void)
+     display_clear(THEME_COLOR_BG);
+     display_fill_rect(0, 0, DISPLAY_W - 1, THEME_TITLE_H - 1,
+                       THEME_COLOR_TITLE_BG);
+-    if (s_cat.mode)
++    if (s_cat.mode == 2)
++        snprintf(title, sizeof title, "Search / %s", s_cat.value);
++    else if (s_cat.mode)
+         snprintf(title, sizeof title, "%s / %s",
+                  mq_category_name(s_cat.cat), s_cat.value);
+     else
+@@ -177,7 +200,8 @@ static void cat_play(int idx)
+     /* BRNOMT-90: play the whole filtered list, starting here — the player
+      * shows "i/N" and auto-advances through the rest. The source is set first
+      * so ReplayGain AUTO can resolve the first track as album playback. */
+-    player_set_queue_source(PLAYER_QUEUE_CAT, s_cat.value, s_cat.cat);
++    player_set_queue_source(PLAYER_QUEUE_CAT,
++                            s_cat.mode == 2 ? "" : s_cat.value, s_cat.cat);
+     {
+         int rc = player_play_list(list, (int)n, idx);
+ 
+@@ -227,13 +251,68 @@ static void cat_ensure_visible(unsigned total)
+         s_cat.top = ((int)total > rows) ? (int)total - rows : 0;
+ }
+ 
++/* Neon Drive A-Z: only lists sorted by their visible text qualify (names,
++ * All Songs, search results); a category's songs are in album order. */
++static int cat_az_ok(void)
++{
++    return s_cat.mode == 0 || s_cat.mode == 2 ||
++           (s_cat.mode == 1 && s_cat.cat == MQ_ALL);
++}
++
++static void cat_jump(int row)
++{
++    s_cat.cursor = row;
++    cat_ensure_visible(cat_total());
++    ui_invalidate_all();
++}
++
++static void cat_open_az(void)
++{
++    static char noun[16];
++    char cur[32];
++
++    if (s_cat.mode) {
++        snprintf(noun, sizeof noun, "SONGS");
++    } else {
++        const char *c = mq_category_name(s_cat.cat);
++        int i;
++
++        for (i = 0; c[i] != '\0' && i < 11; i++)
++            noun[i] = (c[i] >= 'a' && c[i] <= 'z') ? (char)(c[i] - 32) : c[i];
++        noun[i] = 'S';
++        noun[i + 1] = '\0';
++    }
++    cat_label(s_cat.cursor, cur, (int)sizeof cur);
++    az_screen_open(noun, cur, cat_jump);
++}
++
+ static void cat_handle_event(const input_event_t *ev)
+ {
+     unsigned total = cat_total();
+     int key = ev->type;
+ 
+-    if (ev->kind == INPUT_LONG || ev->kind == INPUT_RELEASE)
++    /* PLAY: a short press opens/plays on RELEASE; holding it opens A-Z.
++     * (PRESS is too early to tell the two apart.) */
++    if (ev->type == KEY_SELECT) {
++        /* only a press that started on this screen (the one that opened it
++         * was the previous screen's) */
++        if (ev->kind == INPUT_PRESS) {
++            s_armed = 1;
++            return;
++        }
++        if (!s_armed)
++            return;
++        if (ev->kind == INPUT_LONG && cat_az_ok() && total > 0u) {
++            s_armed = 0;
++            cat_open_az();
++            return;
++        }
++        if (ev->kind != INPUT_RELEASE)
++            return;
++        s_armed = 0;
++    } else if (ev->kind == INPUT_LONG || ev->kind == INPUT_RELEASE) {
+         return;                       /* listings act on PRESS/REPEAT only */
++    }
+ 
+     if (s_use_skin) {
+         int nav;
+@@ -291,7 +370,7 @@ static void cat_handle_event(const input_event_t *ev)
+         }
+         break;
+     case KEY_BACK:
+-        if (s_cat.mode && s_cat.cat != MQ_ALL) {
++        if (s_cat.mode == 1 && s_cat.cat != MQ_ALL) {
+             /* back to the names of this category */
+             s_cat.mode = 0;
+             s_cat.value[0] = '\0';
+diff --git a/firmware/ui/screens/library_screen.c b/firmware/ui/screens/library_screen.c
+index 0a58d39..5dbc0d6 100644
+--- a/firmware/ui/screens/library_screen.c
++++ b/firmware/ui/screens/library_screen.c
+@@ -33,7 +33,10 @@ static void open_label(void)        { open_cat(MQ_LABEL); }
+ static void open_album_artist(void) { open_cat(MQ_ALBUM_ARTIST); }
+ static void open_composer(void)     { open_cat(MQ_COMPOSER); }
+ 
+-static const menu_item_t k_items[MQ_COUNT] = {
++#define LIB_N (MQ_COUNT + 1)
++
++static const menu_item_t k_items[LIB_N] = {
++    { "Search",       NULL, search_screen_open },     /* Neon Drive */
+     { "All Songs",    NULL, open_all },
+     { "Album",        NULL, open_album },
+     { "Artist",       NULL, open_artist },
+@@ -44,18 +47,18 @@ static const menu_item_t k_items[MQ_COUNT] = {
+     { "Composer",     NULL, open_composer },
+ };
+ 
+-static const menu_model_t k_model = { "Library", k_items, MQ_COUNT };
++static const menu_model_t k_model = { "Library", k_items, LIB_N };
+ 
+ static const char *lib_label(int index, char *buf, int cap)
+ {
+-    if (index < 0 || index >= MQ_COUNT)
++    if (index < 0 || index >= LIB_N)
+         return "";
+     snprintf(buf, (size_t)cap, "%s", k_items[index].label);
+     return buf;
+ }
+ 
+ static const theme_skin_list_source_t k_source = {
+-    MQ_COUNT, lib_label, 0
++    LIB_N, lib_label, 0
+ };
+ 
+ static void lib_on_enter(void)
+@@ -98,10 +101,10 @@ static void lib_handle_event(const input_event_t *ev)
+         nav = theme_ui_nav(ev->type);
+         if (nav == THEME_SKIN_PREV || nav == THEME_SKIN_NEXT) {
+             menu_view_move(&s_view, nav == THEME_SKIN_PREV ? -1 : +1,
+-                           MQ_COUNT, rows);
++                           LIB_N, rows);
+             ui_invalidate_all();
+         } else if (nav == THEME_SKIN_SELECT) {
+-            if (s_view.cursor >= 0 && s_view.cursor < MQ_COUNT)
++            if (s_view.cursor >= 0 && s_view.cursor < LIB_N)
+                 k_items[s_view.cursor].on_select();
+         } else if (nav == THEME_SKIN_BACK) {
+             ui_pop_screen();
+@@ -111,15 +114,15 @@ static void lib_handle_event(const input_event_t *ev)
+ 
+     switch (ev->type) {
+     case KEY_UP:
+-        menu_view_move(&s_view, -1, MQ_COUNT, menu_page_size());
++        menu_view_move(&s_view, -1, LIB_N, menu_page_size());
+         ui_invalidate_all();
+         break;
+     case KEY_DOWN:
+-        menu_view_move(&s_view, +1, MQ_COUNT, menu_page_size());
++        menu_view_move(&s_view, +1, LIB_N, menu_page_size());
+         ui_invalidate_all();
+         break;
+     case KEY_SELECT:
+-        if (s_view.cursor >= 0 && s_view.cursor < MQ_COUNT)
++        if (s_view.cursor >= 0 && s_view.cursor < LIB_N)
+             k_items[s_view.cursor].on_select();
+         break;
+     case KEY_BACK:
+diff --git a/firmware/ui/screens/screens.h b/firmware/ui/screens/screens.h
+index 69f2ab8..de6b935 100644
+--- a/firmware/ui/screens/screens.h
++++ b/firmware/ui/screens/screens.h
+@@ -170,6 +170,14 @@ void settings_screen_set_theme_applied(void (*cb)(void));
+ extern const ui_screen_t library_screen;       /* category menu */
+ extern const ui_screen_t library_cat_screen;   /* names -> songs  */
+ void library_cat_open(int cat);                /* set the category before pushing */
++void library_cat_open_search(const char *query); /* Neon Drive: results list */
++
++/* Neon Drive: Search + A-Z jump */
++extern const ui_screen_t search_screen;
++extern const ui_screen_t az_screen;
++void search_screen_open(void);
++void az_screen_open(const char *noun, const char *current, void (*jump)(int row));
++void ui_text_scaled(int x, int y, const char *s, int scale, uint16_t fg);
+ 
+ void settings_screen_reload(void);   /* settings_load() into the live copy  */
+ void settings_screen_store(void);    /* settings_save() the live copy       */
+diff --git a/firmware/ui/screens/search_screen.c b/firmware/ui/screens/search_screen.c
+new file mode 100644
+index 0000000..63e7db0
+--- /dev/null
++++ b/firmware/ui/screens/search_screen.c
+@@ -0,0 +1,224 @@
++/*
++ * search_screen.c — type-to-search with three buttons (Neon Drive).
++ *
++ * The Echo Mini has no keyboard, so letters come from a wheel:
++ *   VOL +/-      spin the wheel (A..Z, 0..9, space; "GO>" once you typed)
++ *   PLAY         add the letter  (on GO>: open the results)
++ *   hold PLAY    open the results
++ *   BACK         delete a letter; on an empty query, leave
++ * Matches update live (title, artist or album contains the text) with a
++ * preview of the first four; the results open in the library song list, so
++ * playing, A-Z and BACK work exactly like everywhere else.
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "screens.h"
++#include "../theme.h"
++#include "../internal/hal.h"
++#include "../../services/media_query.h"
++
++#define SQ_MAX 16
++/* wheel position 0 is GO (only offered once something is typed) */
++static const char k_wheel[] = "\001ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
++#define WHEEL_N ((int)sizeof k_wheel - 1)
++
++static char s_q[SQ_MAX + 1];
++static int  s_wheel = 1;
++static int  s_armed;      /* PLAY went down on THIS screen (see handler) */
++
++static void sq_run(void)
++{
++    (void)mq_search_init(s_q);
++}
++
++static void sq_open_results(void)
++{
++    if (s_q[0] == '\0' || mq_filter_count() == 0u)
++        return;
++    library_cat_open_search(s_q);
++    ui_push_screen(&library_cat_screen);
++}
++
++void search_screen_open(void)
++{
++    s_q[0] = '\0';
++    s_wheel = 1;
++    ui_push_screen(&search_screen);
++}
++
++static void sq_enter(void)
++{
++    s_armed = 0;
++    sq_run();                    /* also on return from the results list */
++    ui_invalidate_all();
++}
++
++static void sq_exit(void)
++{
++    mq_done();
++}
++
++static void wheel_label(int w, char *out)
++{
++    if (k_wheel[w] == '\001')
++        strcpy(out, "GO>");
++    else if (k_wheel[w] == ' ')
++        strcpy(out, "_");
++    else {
++        out[0] = k_wheel[w];
++        out[1] = '\0';
++    }
++}
++
++static void sq_draw(void)
++{
++    char buf[40], lab[4];
++    unsigned n = s_q[0] ? mq_filter_count() : 0u;
++    int i, len = (int)strlen(s_q), x;
++
++    display_clear(THEME_COLOR_BG);
++    display_fill_rect(0, 0, 2, 13, THEME_COLOR_WARN);
++    display_draw_text(8, 4, "SEARCH", THEME_COLOR_ACCENT, THEME_COLOR_BG);
++    snprintf(buf, sizeof buf, s_q[0] ? "%u MATCH%s" : "TITLE ARTIST ALBUM",
++             n, n == 1u ? "" : "ES");
++    display_draw_text(DISPLAY_W - 6 - (int)strlen(buf) * 8, 4, buf,
++                      s_q[0] ? (n ? THEME_COLOR_WARM : THEME_COLOR_WARN)
++                             : THEME_COLOR_DIM, THEME_COLOR_BG);
++
++    /* input box: typed text + the pending wheel letter as a cursor block */
++    display_fill_rect(6, 17, DISPLAY_W - 7, 42, THEME_COLOR_ACCENT);
++    display_fill_rect(8, 19, DISPLAY_W - 9, 40, THEME_COLOR_BG);
++    ui_text_scaled(14, 22, s_q, 2, THEME_COLOR_FG);
++    x = 14 + len * 16;
++    wheel_label(s_wheel, lab);
++    display_fill_rect(x - 1, 21, x + (int)strlen(lab) * 16, 38,
++                      k_wheel[s_wheel] == '\001' ? THEME_COLOR_WARM
++                                                 : THEME_COLOR_WARN);
++    ui_text_scaled(x, 22, lab, 2, THEME_COLOR_BG);
++
++    /* the wheel: neighbours of the current letter */
++    for (i = -6; i <= 6; i++) {
++        int w = s_wheel + i;
++        char c[4];
++
++        while (w < 0) w += WHEEL_N;
++        while (w >= WHEEL_N) w -= WHEEL_N;
++        if (k_wheel[w] == '\001' && s_q[0] == '\0') {
++            c[0] = '.'; c[1] = '\0';
++        } else
++            wheel_label(w, c);
++        if (c[1] != '\0') { c[0] = '>'; c[1] = '\0'; }
++        display_draw_text(156 + i * 22, 49, c,
++                          i == 0 ? THEME_COLOR_WARN
++                                 : (i == -1 || i == 1 ? THEME_COLOR_FG
++                                                      : THEME_COLOR_DIM),
++                          THEME_COLOR_BG);
++    }
++    display_fill_rect(152, 59, 167, 60, THEME_COLOR_WARN);
++
++    /* live preview */
++    for (i = 0; i < 4 && (unsigned)i < n; i++) {
++        media_rec_t rec;
++        int y = 68 + i * 18;
++
++        if (mq_filter_get((unsigned)i, &rec) != FS_OK)
++            break;
++        display_fill_rect(6, y - 2, DISPLAY_W - 7, y + 12,
++                          i == 0 ? THEME_COLOR_SELECT_BG : THEME_COLOR_BG);
++        if (i == 0)
++            display_fill_rect(6, y - 2, 8, y + 12, THEME_COLOR_WARN);
++        snprintf(buf, sizeof buf, "%.20s", rec.title);
++        display_draw_text(14, y + 1, buf, i == 0 ? THEME_COLOR_ACCENT : THEME_COLOR_FG,
++                          i == 0 ? THEME_COLOR_SELECT_BG : THEME_COLOR_BG);
++        snprintf(buf, sizeof buf, "%.14s", rec.artist);
++        display_draw_text(DISPLAY_W - 12 - (int)strlen(buf) * 8, y + 1, buf,
++                          THEME_COLOR_DIM, i == 0 ? THEME_COLOR_SELECT_BG : THEME_COLOR_BG);
++    }
++    if (s_q[0] != '\0' && n == 0u)
++        display_draw_text(14, 70, "no matches - BACK deletes", THEME_COLOR_DIM,
++                          THEME_COLOR_BG);
++    if (n > 4u) {
++        snprintf(buf, sizeof buf, "+%u more", n - 4u);
++        display_draw_text(14, 142, buf, THEME_COLOR_DIM, THEME_COLOR_BG);
++    }
++
++    display_fill_rect(0, 152, DISPLAY_W - 1, 152, THEME_COLOR_SELECT_BG);
++    display_draw_text(6, 158,
++                      k_wheel[s_wheel] == '\001' ? "PLAY SHOW RESULTS  BACK DEL"
++                                                 : "VOL LETTER PLAY ADD BACK DEL",
++                      THEME_COLOR_DIM, THEME_COLOR_BG);
++}
++
++static void sq_handle_event(const input_event_t *ev)
++{
++    int len = (int)strlen(s_q);
++
++    switch (ev->type) {
++    case KEY_UP:
++    case KEY_DOWN:
++        if (ev->kind != INPUT_PRESS && ev->kind != INPUT_REPEAT)
++            return;
++        do {
++            s_wheel += (ev->type == KEY_DOWN) ? 1 : -1;
++            if (s_wheel < 0) s_wheel = WHEEL_N - 1;
++            if (s_wheel >= WHEEL_N) s_wheel = 0;
++        } while (s_wheel == 0 && s_q[0] == '\0');   /* no GO on an empty query */
++        ui_invalidate_all();
++        break;
++    case KEY_SELECT:
++        /* The PLAY press that opened this screen ends here: its RELEASE
++         * must not type a letter, so only act on presses seen here. */
++        if (ev->kind == INPUT_PRESS) {
++            s_armed = 1;
++            return;
++        }
++        if (!s_armed)
++            return;
++        if (ev->kind == INPUT_LONG) {
++            s_armed = 0;
++            sq_open_results();
++            return;
++        }
++        if (ev->kind != INPUT_RELEASE)
++            return;
++        s_armed = 0;
++        if (ev->long_press)
++            return;
++        if (s_wheel == 0) {
++            sq_open_results();
++            return;
++        }
++        if (len < SQ_MAX) {
++            s_q[len] = k_wheel[s_wheel];
++            s_q[len + 1] = '\0';
++            sq_run();
++            ui_invalidate_all();
++        }
++        break;
++    case KEY_BACK:
++        if (ev->kind != INPUT_PRESS)
++            return;
++        if (len > 0) {
++            s_q[len - 1] = '\0';
++            if (s_q[0] == '\0' && s_wheel == 0)
++                s_wheel = 1;
++            sq_run();
++            ui_invalidate_all();
++        } else {
++            ui_pop_screen();
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++const ui_screen_t search_screen = {
++    "search",
++    sq_enter,
++    sq_exit,
++    sq_draw,
++    sq_handle_event,
++    0,
++};
+diff --git a/firmware/ui/screens/theme_ui.c b/firmware/ui/screens/theme_ui.c
+index bed6ed3..bba0855 100644
+--- a/firmware/ui/screens/theme_ui.c
++++ b/firmware/ui/screens/theme_ui.c
+@@ -1,6 +1,7 @@
+ /*
+  * theme_ui.c — generic per-screen skin bridge (see theme_ui.h).
+  */
++int battery_percent(void);   /* drivers/battery.c (-1 = unknown) */
+ #include <string.h>
+ 
+ #include "theme_ui.h"
+@@ -102,7 +103,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+     st->paused = player_get_state() == PLAYER_PAUSED;
+     st->stopped = player_get_state() == PLAYER_STOPPED;
+     st->volume_db = player_get_volume();
+-    st->battery_pct = -1;
++    st->battery_pct = battery_percent();   /* Neon Drive: skins show it */
+     st->position_ms = player_get_position_ms();
+     st->shuffle = player_get_shuffle();
+     st->repeat = player_get_repeat();
+diff --git a/firmware/ui/tests/mock_services.c b/firmware/ui/tests/mock_services.c
+index 51c6202..4e89665 100644
+--- a/firmware/ui/tests/mock_services.c
++++ b/firmware/ui/tests/mock_services.c
+@@ -607,3 +607,6 @@ int art_pack_draw(int x, int y, int large)
+     (void)large;
+     return -1;
+ }
++
++/* Neon Drive: theme_ui reads the gauge for skins */
++int battery_percent(void) { return -1; }
 diff --git a/firmware/ui/tests/run_tests.sh b/firmware/ui/tests/run_tests.sh
 index 3789e62..6ed0345 100644
 --- a/firmware/ui/tests/run_tests.sh
@@ -264,3 +1214,16 @@ index 3789e62..6ed0345 100644
      mock_display.c mock_services.c mock_eq.c -lm
  
  .work/ui_tests
+diff --git a/firmware/ui/ui.mk b/firmware/ui/ui.mk
+index 3ab222d..5b0617b 100644
+--- a/firmware/ui/ui.mk
++++ b/firmware/ui/ui.mk
+@@ -25,6 +25,8 @@ UI_SRCS := $(UI_DIR)/ui.c \
+            $(UI_DIR)/screens/settings_screen.c \
+            $(UI_DIR)/screens/library_screen.c \
+            $(UI_DIR)/screens/library_cat_screen.c \
++           $(UI_DIR)/screens/search_screen.c \
++           $(UI_DIR)/screens/az_screen.c \
+            $(UI_DIR)/screens/skin_screen.c \
+            $(UI_DIR)/screens/quick_screen.c \
+            $(UI_DIR)/screens/eq_screen.c \

@@ -68,7 +68,7 @@ color={faint}
 type=text
 x=8
 y=158
-text="VOL MOVE  PLAY OPEN  BACK"
+text=@HINT@
 color={dim}
 
 [pos]

@@ -2,8 +2,9 @@
 # Rebuild STEP-1-FIRMWARE/HIFIEC90.IMG from source.
 #
 # ReChord (https://github.com/brnomt/FiioDcomp) at a pinned commit + the
-# Neon Drive engine patch (scaled/transparent text, styled lists, transparent
-# and mirrored sprites, a "menu" home action). Linux/macOS/WSL:
+# Neon Drive patch: theme engine extras (scaled/transparent text, styled
+# lists, transparent/mirrored sprites, "menu" home action, battery in skins)
+# plus two new features: Search and A-Z jump. Linux/macOS/WSL:
 #
 #   sudo apt install gcc-arm-none-eabi python3 git make
 #   sh firmware/build.sh
@@ -22,8 +23,9 @@ git clean -qfd firmware
 git apply "$HERE/neon-drive-engine.patch"
 
 # upstream host tests must still pass with the patch
-sh firmware/ui/tests/run_tests.sh   | tail -1
-sh firmware/theme/tests/run_tests.sh | tail -1
+sh firmware/ui/tests/run_tests.sh       | tail -1
+sh firmware/theme/tests/run_tests.sh    | tail -1
+sh firmware/services/tests/run_tests.sh | tail -1
 
 make
 cp build/ReChord_AP5M.IMG "$HERE/../STEP-1-FIRMWARE/HIFIEC90.IMG"

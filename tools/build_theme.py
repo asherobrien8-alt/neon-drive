@@ -91,10 +91,10 @@ def compile_skin(text, name):
 
 
 LISTS = {
-    # out file: (heading expr, list source, vertical word, word colour)
-    "library.skin":     ('"LIBRARY"', "library", "MUSIC", "red"),
-    "library_cat.skin": ("heading", "category", "INDEX", "pink"),
-    "browser.skin":     ("heading", "browser", "FILES", "cyan"),
+    # out file: (heading expr, list source, vertical word, word colour, footer)
+    "library.skin":     ('"LIBRARY"', "library", "MUSIC", "red", '"VOL MOVE  PLAY OPEN  BACK"'),
+    "library_cat.skin": ("heading", "category", "INDEX", "pink", '"PLAY OPEN  HOLD PLAY = A-Z"'),
+    "browser.skin":     ("heading", "browser", "FILES", "cyan", '"VOL MOVE  PLAY OPEN  BACK"'),
 }
 
 
@@ -112,8 +112,8 @@ def sources():
             continue
         yield fn, open(os.path.join(SRC, fn)).read()
     tpl = open(os.path.join(SRC, "_list.tpl")).read()
-    for fn, (head, src, word, col) in LISTS.items():
-        yield fn, (tpl.replace("@HEAD@", head).replace("@SRC@", src)
+    for fn, (head, src, word, col, hint) in LISTS.items():
+        yield fn, (tpl.replace("@HEAD@", head).replace("@SRC@", src).replace("@HINT@", hint)
                    .replace("@WORD@", vword(word, col)))
 
 

@@ -5,6 +5,8 @@ A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 - **Live wallpaper home screen.** An 80s wedge car cruises a neon road into a striped sunset, with pink palms and a scrolling grid.
 - **Volume runner.** On Now Playing, a glowing runner stands on the volume track. Turn it up and he sprints right; turn it down and he sprints left.
 - **Cyber settings.** Terminal-style `SYS://CONFIG` screen.
+- **Search.** Library → Search: spin letters with VOL, add with PLAY, and matches (title, artist or album) show up live as you type.
+- **A-Z jump.** In any long list (Artists, Albums, All Songs, search results), **hold PLAY** for a letter grid and jump straight to that letter.
 - **Cleaner navigation.** A proper library (Artist / Album / Genre / Year / …), a file browser, and a counter showing where you are in every list.
 - **Low-bitrate finder.** A PC tool that lists every song under 192 kbps, grouped by album, so you know what to re-get as FLAC.
 
@@ -13,8 +15,14 @@ A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 | Home (live) | Volume runner |
 |---|---|
 | ![home](docs/preview/home_live_wallpaper.gif) | ![runner](docs/preview/now_playing_volume_runner.gif) |
+| **Search** | **A-Z jump (hold PLAY)** |
+| ![search](docs/preview/search.png) | ![a-z](docs/preview/az.png) |
 
-These previews come from the real theme engine running on a PC, so they show exactly what the player draws.
+## Try it first: the simulator
+
+Open **`simulator/index.html`** in any browser (phone works too; nothing to install). It runs ReChord's **actual firmware UI code**, compiled to WebAssembly: the same screens, theme engine and library index that run on the player, with a demo library of 122 synthwave tracks. Only the hardware is pretend: the buttons are on screen and there's no audio (songs "play" on a timer).
+
+Buttons work like the real ones: hold PLAY for A-Z, and VOL repeats when held. On a computer you can use <kbd>↑</kbd>/<kbd>↓</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd> and <kbd>M</kbd>.
 
 ---
 
@@ -66,8 +74,9 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 
 | | |
 |---|---|
-| VOL + / − | move through menus · change volume on Now Playing |
-| PLAY | open / select |
+| VOL + / − | move through menus · change volume on Now Playing · spin letters in Search |
+| PLAY | open / select · add a letter in Search |
+| hold PLAY | A-Z jump in lists · show results in Search |
 | BACK | go back |
 | MENU (home bar) | full menu: Files, USB storage, System |
 | Power, short press | screen off / on |
@@ -97,8 +106,14 @@ tools/build_theme.py compiles src/ -> STEP-2-THEME/ and checks every ReChord lim
 tools/make_assets.py the pixel-art sprites (car, palm, runner) -> 1-bit assets
 tools/previews.sh    re-renders docs/preview with the real engine
 firmware/build.sh    rebuilds HIFIEC90.IMG: ReChord @ pinned commit + neon-drive-engine.patch
+simulator/build.sh   rebuilds simulator/index.html (needs `pip install ziglang==0.13.0`, node)
 ```
 
-The engine patch adds a few theme features to ReChord: 2×/3× text, transparent text and sprites, mirrored sprites, colourable list selection bars, and a `menu` home button. Packages that don't use them render exactly as before, and ReChord's own test suites pass with the patch applied.
+The firmware patch (`firmware/neon-drive-engine.patch`) adds to ReChord:
+
+- **Search** (`search_screen.c`, `mq_search_init`) and **A-Z jump** (`az_screen.c`, `mq_initial_*`), with new host tests in `services/tests/test_search_az.c`.
+- **Theme engine extras:** 2×/3× text, transparent text and sprites, mirrored sprites, colourable list selection bars, a `menu` home button, and the real battery level for skins (upstream always passed "unknown").
+
+Themes that don't use the extras render exactly as before, and all of ReChord's test suites (UI, theme, services) pass with the patch. The image adds about 5 KB of code and 112 bytes of RAM, still under ReChord's RAM ceiling.
 
 All art is original. ReChord is by [brnomt](https://github.com/brnomt/FiioDcomp). This project isn't affiliated with FiiO or Snowsky.

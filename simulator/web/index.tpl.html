@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Neon Drive — Echo Mini simulator</title>
+<style>
+:root{--bg:#0b0816;--body:#1b1726;--body2:#262036;--edge:#3a3350;--txt:#eef4ff;--dim:#8a86b0;--cyan:#3ff0e0;--pink:#ff3fbf;--red:#ff3b4f;--lime:#b6ff5a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:radial-gradient(120% 80% at 50% 0%,#2a0d45 0%,var(--bg) 60%);color:var(--txt);
+  font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-height:100%}
+main{max-width:720px;margin:0 auto;padding:18px 14px 32px;display:flex;flex-direction:column;align-items:center;gap:14px}
+h1{margin:4px 0 0;font-size:20px;letter-spacing:.12em;color:var(--pink);text-shadow:2px 2px 0 #1d8a82}
+.sub{color:var(--dim);font-size:12px;text-align:center;margin-top:-8px}
+.device{width:100%;max-width:560px;background:linear-gradient(160deg,var(--body2),var(--body));border:1px solid var(--edge);
+  border-radius:22px;padding:16px 16px 18px;box-shadow:0 20px 50px #0008, inset 0 1px 0 #ffffff14}
+.topbtns{display:flex;justify-content:space-between;align-items:center;margin:-4px 6px 12px}
+.screen{background:#000;border-radius:10px;padding:10px;border:1px solid #000;box-shadow:inset 0 0 0 2px #2b2540}
+canvas{display:block;width:100%;aspect-ratio:320/170;image-rendering:pixelated;image-rendering:crisp-edges;border-radius:3px}
+.pads{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:10px;margin-top:16px}
+.vol{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+button{appearance:none;border:1px solid var(--edge);background:linear-gradient(#2e2842,#201b30);color:var(--txt);
+  font:inherit;font-weight:700;letter-spacing:.08em;border-radius:12px;padding:16px 6px;touch-action:none;user-select:none;
+  -webkit-user-select:none;-webkit-touch-callout:none;box-shadow:0 3px 0 #0007;cursor:pointer}
+button small{display:block;font-weight:400;color:var(--dim);font-size:10px;letter-spacing:.04em;margin-top:2px}
+button.on{transform:translateY(2px);box-shadow:0 1px 0 #0007;border-color:var(--cyan);color:var(--cyan)}
+button.play{border-color:#7a2a5f;background:linear-gradient(#3b1d3b,#2a1430)}
+button.pwr{padding:8px 14px;border-radius:999px;font-size:12px}
+.brand{font-size:11px;letter-spacing:.3em;color:var(--dim)}
+.hint{min-height:42px;width:100%;max-width:560px;background:#120e20;border:1px solid var(--edge);border-left:3px solid var(--cyan);
+  border-radius:8px;padding:10px 12px;font-size:13px}
+.hint b{color:var(--lime);font-weight:600}
+.help{width:100%;max-width:560px;color:var(--dim);font-size:12px}
+.help summary{cursor:pointer;color:var(--txt)}
+.help li{margin:4px 0}
+kbd{background:#221c35;border:1px solid var(--edge);border-radius:4px;padding:0 5px;color:var(--txt)}
+</style>
+</head>
+<body>
+<main>
+  <h1>NEON DRIVE</h1>
+  <div class="sub">Echo Mini simulator · runs the real ReChord firmware UI · <span id="tracks"></span></div>
+  <div class="device">
+    <div class="topbtns"><span class="brand">ECHO&nbsp;·&nbsp;SIM</span><button class="pwr" data-k="POWER">⏻ POWER</button></div>
+    <div class="screen"><canvas id="lcd" width="320" height="170"></canvas></div>
+    <div class="pads">
+      <button data-k="BACK">BACK</button>
+      <button class="play" data-k="SEL">▶ PLAY<small>hold = A-Z</small></button>
+      <button data-k="MENU">MENU</button>
+    </div>
+    <div class="vol">
+      <button data-k="DOWN">VOL −<small>next / down</small></button>
+      <button data-k="UP">VOL +<small>prev / up</small></button>
+    </div>
+  </div>
+  <div class="hint" id="hint">Booting…</div>
+  <details class="help">
+    <summary>Things to try</summary>
+    <ul>
+      <li><b>Search:</b> LIBRARY → Search. VOL spins the letter, PLAY adds it, BACK deletes. Hold PLAY (or spin to <code>GO&gt;</code>) for results.</li>
+      <li><b>A-Z jump:</b> open any long list (Library → Artist, or All Songs) and <b>hold PLAY</b>.</li>
+      <li><b>Volume runner:</b> play a song, then tap VOL+ / VOL− on Now Playing.</li>
+      <li><b>Other themes:</b> SETTINGS → Interface → Theme.</li>
+      <li>Keyboard: <kbd>↑</kbd>/<kbd>↓</kbd> volume keys, <kbd>Enter</kbd> PLAY (hold for A-Z), <kbd>Backspace</kbd> BACK, <kbd>M</kbd> MENU.</li>
+    </ul>
+    <p>The screen is drawn by ReChord's own code compiled to WebAssembly — the same screens, theme engine and library index that run on the player. Only the hardware is pretend: there's no audio, and songs "play" on a timer.</p>
+  </details>
+</main>
+<script>window.SIM_DATA=/*DATA*/;</script>
+<script>/*APP*/</script>
+</body>
+</html>

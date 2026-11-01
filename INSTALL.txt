@@ -1,0 +1,44 @@
+NEON DRIVE for the Snowsky Echo Mini — install
+================================================
+
+BEFORE YOU START
+ 1. Copy any music on the player's INTERNAL storage to your PC (installing can wipe it).
+ 2. Download the official FiiO Echo Mini firmware and keep the zip somewhere safe.
+    It's your undo button: https://fiio.com/newsinfo/1144405.html
+ 3. Take the microSD card OUT of the player.
+ 4. Charge the player above 50%.
+
+STEP 1 - FIRMWARE
+ 1. Plug the Echo Mini into your PC. It shows up as a drive.
+ 2. Open the STEP-1-FIRMWARE folder and copy HIFIEC90.IMG onto the player's drive,
+    at the very top level (NOT inside any folder).
+ 3. In Windows, right-click the player's drive and choose Eject. Unplug it.
+ 4. Restart the player. It installs by itself. Wait until it boots up.
+
+STEP 2 - THEME
+ 1. Plug the player back in. The screen says "USB mass storage" and it shows up as a drive.
+ 2. Open the STEP-2-THEME folder. Copy the ".rechord" folder onto the top level
+    of the player's drive. If Windows asks, click "Replace the files".
+ 3. Eject, unplug. The theme loads on the next start.
+
+STEP 3 - FIRST START
+ 1. On the home screen go to SYSTEM SETTINGS -> Rebuild index.
+    (Do this again whenever you add new music.)
+ 2. Put the microSD card back in.
+
+CONTROLS
+ VOL + / -        move up / down, change volume on Now Playing
+ PLAY             open / select
+ hold PLAY        A-Z jump in any long list (artists, albums, songs)
+ BACK             go back (on the home screen: the full menu)
+ MENU             quick settings (shuffle, repeat, playlist)
+ Search           MEDIA LIBRARY -> Search. VOL picks a letter, PLAY adds it,
+                  BACK deletes, hold PLAY for the results.
+
+PLAYS: FLAC, MP3, WAV.  NOT YET: M4A/AAC, OGG, APE, DSD, Bluetooth, USB DAC.
+
+GOING BACK TO NORMAL
+ Copy the official FiiO HIFIECxx.IMG (from step 2 of "Before you start") onto the
+ top level of the player, eject, restart. Done - it's stock again.
+ If the player ever won't turn on at all, don't panic: follow the "Recovery" section at
+ https://github.com/brnomt/FiioDcomp/blob/master/docs/FLASHING.md

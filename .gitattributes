@@ -2,3 +2,4 @@
 *.IMG binary
 *.bin binary
 STEP-2-THEME/.rechord/active_theme binary
+INSTALL.txt text eol=crlf

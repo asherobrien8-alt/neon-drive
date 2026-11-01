@@ -5,7 +5,8 @@
 # Neon Drive patch: theme engine extras (scaled/transparent text, styled
 # lists, transparent/mirrored sprites, "menu" home action, battery in skins)
 # plus Search, A-Z jump, playlists, faster loading, smoother playback,
-# extra EQ presets and the boot / power-off animations. Linux/macOS/WSL:
+# extra EQ presets, the boot / power-off animations and a fixed-point MP3
+# decoder for Core B (libmad, vendored in the patch). Linux/macOS/WSL:
 #
 #   sudo apt install gcc-arm-none-eabi python3 git make
 #   sh firmware/build.sh
@@ -27,6 +28,8 @@ git apply "$HERE/neon-drive-engine.patch"
 sh firmware/ui/tests/run_tests.sh       | tail -1
 sh firmware/theme/tests/run_tests.sh    | tail -1
 sh firmware/services/tests/run_tests.sh | tail -1
+sh firmware/player/tests/run_tests.sh   | tail -1
+sh firmware/drivers/tests/run_tests.sh  | tail -1
 
 make
 cp build/ReChord_AP5M.IMG "$HERE/../STEP-1-FIRMWARE/HIFIEC90.IMG"

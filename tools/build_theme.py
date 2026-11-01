@@ -108,7 +108,7 @@ def compile_skin(text, name):
 
 LISTS = {
     # out file: (heading expr, list source, vertical word, word colour, footer)
-    "library.skin":     ('"LIBRARY"', "library", "MUSIC", "red", '"VOL MOVE  PLAY OPEN  BACK"'),
+    "library.skin":     ("heading", "library", "MUSIC", "red", '"VOL MOVE  PLAY OPEN  BACK"'),
     "library_cat.skin": ("heading", "category", "INDEX", "pink", '"PLAY OPEN  HOLD PLAY = A-Z"'),
     "browser.skin":     ("heading", "browser", "FILES", "cyan", '"VOL MOVE  PLAY OPEN  BACK"'),
 }

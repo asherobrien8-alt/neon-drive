@@ -2,19 +2,20 @@
 
 A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 
-- **Night-city home screen.** A painted cyberpunk skyline (Tokyo / Bangkok / Chongqing vibes: towers, kanji neon, a hologram billboard, a river and a bridge full of traffic) next to Cyberpunk-style slanted menu tags. The selected tag glitches and flickers like a dying neon tube, signs stutter on and off, the hologram loops and headlights slide across the bridge.
-- **Boot animation.** A Japanese alley shop: the roll-up shutter lifts, the 電源オン ("power on") neon sign flickers to life, and a neon loading bar fills.
-- **Power-off animation.** Hold POWER: a glitchy "virus" eats the screen diagonally from the top-right to the bottom-left in 3 seconds, then the player switches off.
-- **Playlists.** Library → Playlists. Every song exists once; playlists just point at it (like an iPod). Uses normal `.m3u8` files in a `Playlists` folder.
-- **More EQ.** Bass Boost, Bass Max, Vocal Boost, Treble Boost, Loudness, Synthwave and Late Night presets, plus a simple 10-slider custom EQ.
-- **Faster and smoother.** Screens open much faster (the library check and file seeking were rewritten) and the animations step aside when the music needs the CPU, so playback no longer chops.
-- **Bitrate on Now Playing.** `24/96K 1411KBPS` next to the sample rate.
-- **Volume runner.** On Now Playing, a glowing runner stands on the volume track. Turn it up and he sprints right; turn it down and he sprints left. He now stays on screen across the whole volume range.
-- **Cyber settings.** Terminal-style `SYS://CONFIG` screen.
-- **Search.** Library → Search: spin letters with VOL, add with PLAY, and matches (title, artist or album) show up live as you type.
-- **A-Z jump.** In any long list (Artists, Albums, All Songs, search results), **hold PLAY** for a letter grid and jump straight to that letter.
-- **Cleaner navigation.** A proper library (Artist / Album / Genre / Year / …), a file browser, and a counter showing where you are in every list.
-- **Low-bitrate finder.** A PC tool that lists every song under 192 kbps, grouped by album, so you know what to re-get as FLAC.
+- **Music that actually plays.** MP3s used to stutter and crawl: the decoder Core B used (minimp3) is floating point, and the Echo Mini's second core has no FPU, so every MP3 needed ~170 MIPS it doesn't have (and the old adapter also dropped frames). Neon Drive swaps in **libmad**, a fixed-point decoder: about **16 MIPS** for the same file, 10x less. FLAC and WAV were already fine.
+- **Volume that does something.** The DAC tops out at 0 dB, but the old range kept counting up to +20 dB with no change in sound. The range is now 60 real steps, and the runner covers it exactly.
+- **Night-city home screen.** A painted cyberpunk skyline (Tokyo / Bangkok / Chongqing vibes: towers, kanji neon, a river and a bridge full of traffic) next to Cyberpunk-style slanted menu tags: **MUSIC, NOW PLAYING, MUSIC SETUP, SYSTEM**. The selected tag glitches like a dying neon tube, signs stutter, headlights slide across the bridge.
+- **Battery billboard.** Every other 10 seconds the main tower's hologram turns into a dumb ad (SYNTH-COLA, NEURO-GUM) carrying the battery %, with a lightning bolt while it charges. The battery % is now a real curve instead of 5 steps.
+- **Boot animation.** A Japanese alley shop: the roll-up shutter lifts, the 電源オン ("power on") neon sign flickers to life, a neon loading bar fills.
+- **Power-off animation.** Hold POWER: a glitchy "virus" eats the screen diagonally from top-right to bottom-left in 3 seconds, then the player switches off. Auto-off and the sleep timer use it too.
+- **USB and charging screens.** A themed DATA LINK screen in USB drive mode, and a charging screen when it's switched off on the cable.
+- **MUSIC menu.** Playlists, All Songs, Artists, Search, Organize. **Playlists** holds Favorites, your `.m3u8` playlists, and **every music folder** on the SD card / in Music as its own playlist. **Organize** has Albums, Genres, Years, Recently / Most played and Rebuild library.
+- **Now Playing.** Long titles and artists scroll. `24/96K 1411KBPS` next to the sample rate. Optional **cover art** (MENU > Cover art). Volume and skip keep working even if a file won't play.
+- **Quick settings (MENU).** Shuffle, Repeat, Cover art, **Sleep timer** (15/30/60/90 min), Playlist.
+- **More EQ.** Bass Boost, Bass Max, Vocal Boost, Treble Boost, Loudness, Synthwave and Late Night presets, plus a simple 10-slider custom EQ. (Fixed: opening the preset list froze the player.)
+- **Volume runner.** On Now Playing a glowing runner stands on the volume track and sprints left or right when you change it.
+- **Search and A-Z jump.** MUSIC > Search: spin letters with VOL, add with PLAY. In any long list, **hold PLAY** for a letter grid.
+- **PC tools.** A low-bitrate finder (songs under 192 kbps) and a cover-art maker.
 
 ![all screens](docs/preview/overview.png)
 
@@ -75,7 +76,7 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 
 **Step 3: first boot**
 
-1. On the home screen pick **SYSTEM → Rebuild library** so the library finds your songs (do this again whenever you add music or playlists).
+1. On the home screen pick **MUSIC → Organize → Rebuild library** so the library finds your songs (do this again whenever you add music or playlists).
 2. Put the microSD card back.
 
 ### Controls
@@ -83,17 +84,29 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 | | |
 |---|---|
 | VOL + / − | move up / down through menus · change volume on Now Playing · spin letters in Search |
-| PLAY | open / select · add a letter in Search |
-| hold PLAY | A-Z jump in lists · show results in Search |
-| BACK | go back |
-| MENU button | quick settings (shuffle, repeat, playlist) |
-| BACK on the home screen | classic menu: Files, USB storage, System |
+| PLAY | open / select · add a letter in Search · play/pause on Now Playing |
+| hold PLAY | A-Z jump in lists · results in Search · add/remove Favorite on a song in an album or playlist |
+| hold VOL + / − on Now Playing | next / previous song |
+| BACK | go back (on the home screen: the classic ReChord menu) |
+| MENU button | quick settings: shuffle, repeat, cover art, sleep timer, queue |
 | Power, short press | screen off / on |
 | Power, hold | power-off animation, then off |
 
+The file browser moved into **SYSTEM** (it's still there, just off the home screen).
+
 ### Playlists
 
-Put playlist files (`.m3u` or `.m3u8`, the kind iTunes, MusicBee, foobar2000 or VLC export) in a folder called **`Playlists`** at the top of the player (or of the SD card). Songs are matched to the copies already in `Music`, so nothing is duplicated. Then **SYSTEM → Rebuild library** and they show up under **Library → Playlists**. Hold PLAY on a song inside an album or playlist to add it to Favorites.
+**Music > Playlists** shows, in this order:
+
+1. **Favorites** (hold PLAY on a song inside an album or playlist to add or remove it).
+2. **Playlist files**: `.m3u` / `.m3u8` (the kind iTunes, MusicBee, foobar2000 or VLC export) in a folder called **`Playlists`** at the top of the player or the SD card. Songs are matched to the copies already on the device, so nothing is duplicated.
+3. **Every music folder**: each folder at the top of the SD card (or inside `SD/Music` / `Music` on the player) becomes a playlist with that folder's name, so music organized in folders shows up with nothing to set up.
+
+After copying music or playlists: **Music > Organize > Rebuild library**.
+
+### Cover art
+
+The player can't decode JPEGs, so covers are prepared once on the PC: run **`cover-art-maker/Make Cover Art.bat`** with the player plugged in (needs Python 3). Then on the player: MENU > Cover art > on.
 
 ### Going back to stock
 
@@ -129,7 +142,9 @@ The firmware patch (`firmware/neon-drive-engine.patch`) adds to ReChord:
 - **Search** (`search_screen.c`, `mq_search_init`), **A-Z jump** (`az_screen.c`, `mq_initial_*`) and **playlists** (`mq_playlists_init`, `mq_playlist_init`), with host tests in `services/tests/test_search_az.c`.
 - **Speed:** `fs_seek` no longer restarts the FAT cluster walk (seeks were quadratic), and the library index is verified once per mount instead of on every screen.
 - **Smooth audio:** skins pump the Core B file ring while drawing, and animation frames are throttled/skipped while the ring is low.
-- **Boot / power-off animations** (`startup/neon_fx.c`) streamed from the theme's `img/` folder.
+- **Boot / power-off animations, USB and charging screens** (`startup/neon_fx.c`) streamed from the theme's `img/` folder.
+- **Fixed-point MP3 on Core B:** libmad 0.15.1b (GPL-2.0+, vendored in `player/codecs/libmad/`) behind minimp3's API (`codecs/mp3_mad.c`); its 32 KiB requantization table is built in RAM at Core B boot, so Core B's image actually shrinks. Host tests: `player/tests/test_mp3_mad.c` (real Layer III stream, bit reservoir, table accuracy).
+- **Fixes:** EQ preset picker overflowed a 16-row array (hard freeze), volume range clamped to the DAC's 0 dB, battery % from a Li-ion curve, volume/skip over a playback error.
 - **Images in skins:** an `image` meter that streams raw RGB565 from the theme folder (no RAM), plus up to 6 partial-refresh regions.
 - **EQ:** 7 new presets and a 10-slider graphic EQ screen; styled compiled menus.
 - **Theme engine extras:** 2×/3× text, transparent text and sprites, mirrored sprites, colourable list selection bars, a `menu` home button, and the real battery level for skins (upstream always passed "unknown").

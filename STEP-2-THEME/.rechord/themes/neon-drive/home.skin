@@ -1,8 +1,8 @@
 [skin]
 refresh_ms=90
 refresh_h=170
-dyn=0,20,172,158
-dyn2=242,30,267,73
+dyn=0,20,174,146
+dyn2=232,22,281,79
 dyn3=195,69,207,92
 dyn4=295,73,307,96
 dyn5=262,104,316,114
@@ -15,6 +15,9 @@ gy=27 + mod(t / 30, 13)
 sa=(mod(t, 3100) < 2700 || mod(t, 140) < 60)
 sb=(mod(t + 1700, 4300) < 3900 || mod(t, 110) < 40)
 sc=(mod(t + 900, 5200) < 4300 || mod(t, 190) < 70)
+ph=mod(t, 20000)
+ad=(ph >= 10000 && (ph > 10360 || mod(t, 90) < 50))
+rs=(ad == 0 && (ph < 1500 || (ph >= 10000 && ph < 10400)))
 [a]
 type=image
 file="img/city.565"
@@ -50,27 +53,26 @@ y=15
 w=30
 h=1
 color=7248
-[bt]
-type=text
-x=314
-y=5
-text=(battery < 0 ? "PWR --" : "PWR " + battery + "%")
-align=right
-color=(battery >= 0 && battery < 15 ? 63815 : 61375)
-bg=none
 [ft]
 type=text
 x=8
-y=161
-text="SYS.ONLINE // 2077"
-color=35894
+y=158
+text="SYS.ONLINE"
+color=61375
+bg=none
+[ft2]
+type=text
+x=96
+y=158
+text="// 2077"
+color=63815
 bg=none
 [t0]
 type=quad
 x=4
-y=22
+y=26
 w=160
-h=21
+h=23
 skew=8
 lw=1
 color=(sel == 0 ? tr : 2115)
@@ -79,9 +81,9 @@ dyn=1
 [t1]
 type=quad
 x=4
-y=49
+y=56
 w=160
-h=21
+h=23
 skew=8
 lw=1
 color=(sel == 1 ? tr : 2115)
@@ -90,9 +92,9 @@ dyn=1
 [t2]
 type=quad
 x=4
-y=76
+y=86
 w=160
-h=21
+h=23
 skew=8
 lw=1
 color=(sel == 2 ? tr : 2115)
@@ -101,29 +103,18 @@ dyn=1
 [t3]
 type=quad
 x=4
-y=103
+y=116
 w=160
-h=21
+h=23
 skew=8
 lw=1
 color=(sel == 3 ? tr : 2115)
 line=(sel == 3 ? tr : 7248)
 dyn=1
-[t4]
-type=quad
-x=4
-y=130
-w=160
-h=21
-skew=8
-lw=1
-color=(sel == 4 ? tr : 2115)
-line=(sel == 4 ? tr : 7248)
-dyn=1
 [sl]
 type=fill
 x=18
-y=sel * 27 + gy - 5
+y=sel * 30 + gy - 4
 w=96 + mod(t, 40)
 h=2
 color=16284
@@ -132,7 +123,7 @@ dyn=1
 [mk]
 type=fill
 x=12
-y=sel * 27 + 29
+y=sel * 30 + 34
 w=3
 h=7
 color=(fk ? 16284 : 61375)
@@ -140,56 +131,59 @@ dyn=1
 [l0]
 type=text
 x=22 + (sel == 0 ? jx : 0)
-y=29
-text="01  FILE BROWSER"
+y=34
+text="01  MUSIC"
 color=(sel == 0 ? 61375 : 16284)
 bg=none
 dyn=1
 [l1]
 type=text
 x=22 + (sel == 1 ? jx : 0)
-y=56
-text="02  MEDIA LIBRARY"
+y=64
+text="02  NOW PLAYING"
 color=(sel == 1 ? 61375 : 16284)
 bg=none
 dyn=1
 [l2]
 type=text
 x=22 + (sel == 2 ? jx : 0)
-y=83
-text="03  NOW PLAYING"
+y=94
+text="03  MUSIC SETUP"
 color=(sel == 2 ? 61375 : 16284)
 bg=none
 dyn=1
 [l3]
 type=text
 x=22 + (sel == 3 ? jx : 0)
-y=110
-text="04  MUSIC SETUP"
+y=124
+text="04  SYSTEM"
 color=(sel == 3 ? 61375 : 16284)
-bg=none
-dyn=1
-[l4]
-type=text
-x=22 + (sel == 4 ? jx : 0)
-y=137
-text="05  SYSTEM"
-color=(sel == 4 ? 61375 : 16284)
 bg=none
 dyn=1
 [m]
 type=list
 axis=vertical
-y=22
-height=27
-rows=5
-selected=2
-item0=FILE BROWSER:files
-item1=MEDIA LIBRARY:library
-item2=NOW PLAYING:player
-item3=MUSIC SETUP:settings
-item4=SYSTEM:system
+y=26
+height=30
+rows=4
+selected=0
+item0=MUSIC:library
+item1=NOW PLAYING:player
+item2=MUSIC SETUP:settings
+item3=SYSTEM:system
 visible=0
+[rst]
+type=image
+file="img/city.565"
+x=232
+y=22
+w=50
+h=58
+sx=232
+sy=22
+sw=320
+visible=rs
+dyn=1
 [ho]
 type=image
 file="img/holo_" + mod(t / 160, 4) + ".565"
@@ -197,6 +191,35 @@ x=242
 y=30
 w=26
 h=44
+visible=(ad == 0)
+dyn=1
+[adv]
+type=image
+file="img/ad_" + mod(t / 20000, 2) + ".565"
+x=232
+y=22
+w=50
+h=58
+visible=ad
+dyn=1
+[bat]
+type=text
+x=(charging ? 262 : 257)
+y=69
+text=(battery < 0 ? "--" : battery + "%")
+align=center
+color=(battery >= 0 && battery < 15 ? 63815 : 61375)
+bg=none
+visible=ad
+dyn=1
+[bolt]
+type=image
+file="img/bolt.565"
+x=236
+y=67
+w=7
+h=11
+visible=ad && charging
 dyn=1
 [sa1]
 type=image

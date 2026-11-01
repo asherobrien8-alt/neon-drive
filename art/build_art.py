@@ -40,9 +40,11 @@ def main():
     os.makedirs(OUT_ART, exist_ok=True)
     subprocess.run([sys.executable, os.path.join(HERE, "render_city.py"), OUT_ART], check=True)
     subprocess.run([sys.executable, os.path.join(HERE, "render_boot.py"), OUT_ART], check=True)
+    subprocess.run([sys.executable, os.path.join(HERE, "render_ad.py"), OUT_ART], check=True)
     jobs = [("city.png", "city.565")] + [("holo_%d.png" % i, "holo_%d.565" % i) for i in range(4)] + \
            [("boot_shut.png", "boot_shut.565"), ("boot_open.png", "boot_open.565"),
-            ("boot_sign.png", "boot_sign.565")]
+            ("boot_sign.png", "boot_sign.565"), ("ad_0.png", "ad_0.565"),
+            ("ad_1.png", "ad_1.565"), ("bolt.png", "bolt.565")]
     total = 0
     for src, dst in jobs:
         im = Image.open(os.path.join(OUT_ART, src))

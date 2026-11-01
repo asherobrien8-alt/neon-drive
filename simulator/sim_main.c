@@ -40,7 +40,10 @@ void sim_player_advance(unsigned dt_ms);
 /* ---------------------------------------------------------------- stubs */
 void log_printf(const char *fmt, ...) { (void)fmt; }
 int  input_poll(input_event_t *ev) { (void)ev; return 0; }
+static int s_charging;
 int battery_percent(void) { return 75; }
+int battery_charging(void) { return s_charging; }
+EXPORT("sim_set_charging") void sim_set_charging(int on) { s_charging = on; }
 
 /* ---------------------------------------------------------------- library */
 typedef struct { const char *artist, *album, *genre; int year; const char *titles; } album_t;
@@ -257,6 +260,7 @@ EXPORT("sim_init") int sim_init(void)
     ui_push_screen(&menu_screen);
     skin_home_set_actions(open_library, open_player, open_settings);
     skin_home_set_more(open_files, open_system);
+    library_screen_set_rebuild(0);
     settings_screen_set_theme_applied(home_stack_sync);
     home_stack_sync();
     ui_render();

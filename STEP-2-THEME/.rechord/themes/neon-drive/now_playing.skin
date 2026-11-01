@@ -3,8 +3,10 @@ refresh_ms=60
 dyn=0,0,319,18
 dyn2=0,106,319,143
 dyn3=0,144,319,169
+dyn4=8,38,205,53
+dyn5=30,60,205,67
 [vars]
-tx=10 + vol_lv * 284 / 80
+tx=10 + vol_lv * 284 / 60
 fl=(tx < rx ? 1 : (tx > rx ? 0 : fl))
 mv=(tx != rx)
 lt=(mv ? t : lt)
@@ -59,10 +61,13 @@ color=63945
 type=text
 x=8
 y=38
+w=196
+scroll=45
 text=title
 scale=2
-maxc=12
 color=61375
+bg=4195
+dyn=1
 [by]
 type=text
 x=8
@@ -73,9 +78,12 @@ color=63945
 type=text
 x=30
 y=60
+w=174
+scroll=60
 text=artist
-maxc=22
 color=61375
+bg=4195
+dyn=1
 [album]
 type=text
 x=8
@@ -218,6 +226,29 @@ x=230
 y=81
 color=16284
 bg=none
+[cvbg]
+type=fill
+x=212
+y=22
+w=100
+h=84
+color=4195
+visible=cover && art_ok
+[cvfr]
+type=roundrect
+x=219
+y=22
+w=86
+h=84
+r=3
+color=16284
+visible=cover && art_ok
+[cv]
+type=art
+size=large
+x=222
+y=24
+visible=cover && art_ok
 [lane]
 type=fill
 x=0
@@ -233,7 +264,7 @@ y=136
 w=300
 h=3
 value=vol_lv
-max=80
+max=60
 color=16284
 bg=14731
 dyn=1

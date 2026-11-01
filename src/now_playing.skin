@@ -6,9 +6,11 @@ refresh_ms=60
 dyn=0,0,319,18
 dyn2=0,106,319,143
 dyn3=0,144,319,169
+dyn4=8,38,205,53
+dyn5=30,60,205,67
 
 [vars]
-tx=10 + vol_lv * 284 / 80
+tx=10 + vol_lv * 284 / 60
 fl=(tx < rx ? 1 : (tx > rx ? 0 : fl))
 mv=(tx != rx)
 lt=(mv ? t : lt)
@@ -72,10 +74,13 @@ color={red}
 type=text
 x=8
 y=38
+w=196
+scroll=45
 text=title
 scale=2
-maxc=12
 color={white}
+bg={navy}
+dyn=1
 
 [by]
 type=text
@@ -88,9 +93,12 @@ color={red}
 type=text
 x=30
 y=60
+w=174
+scroll=60
 text=artist
-maxc=22
 color={white}
+bg={navy}
+dyn=1
 
 [album]
 type=text
@@ -255,6 +263,33 @@ color={cyan}
 bg=none
 
 # ---------------------------------------------------------------- volume runner (dyn)
+# cover art (quick settings > Cover art): over the mini sunset
+[cvbg]
+type=fill
+x=212
+y=22
+w=100
+h=84
+color={navy}
+visible=cover && art_ok
+
+[cvfr]
+type=roundrect
+x=219
+y=22
+w=86
+h=84
+r=3
+color={cyan}
+visible=cover && art_ok
+
+[cv]
+type=art
+size=large
+x=222
+y=24
+visible=cover && art_ok
+
 [lane]
 type=fill
 x=0
@@ -271,7 +306,7 @@ y=136
 w=300
 h=3
 value=vol_lv
-max=80
+max=60
 color={cyan}
 bg={faint}
 dyn=1

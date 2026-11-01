@@ -23,7 +23,7 @@ color=63945
 type=text
 x=8
 y=5
-text="LIBRARY"
+text=heading
 maxc=30
 color=16284
 [bat]

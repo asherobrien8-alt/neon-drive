@@ -1,432 +1,522 @@
-# HOME — live retrowave wallpaper: a wedge car cruising a neon road into a
-# striped sun. Only the road band (y 92-145) and the menu bar animate.
+# HOME — neon tag menu + night city (from Jace's mockup).
+# Selected tag flickers like a failing neon tube, stars twinkle, the sun
+# glows with rings radiating out, windows and antenna lights live.
+# Everything animates, so the whole screen refreshes (~10 fps).
 [skin]
-refresh_ms=80
-dyn=0,92,319,145
-dyn2=0,146,319,169
+refresh_ms=90
+refresh_h=170
 
 [vars]
-p=mod(t / 3, 1024)
-z0=mod(p, 1024)
-z1=mod(p + 256, 1024)
-z2=mod(p + 512, 1024)
-z3=mod(p + 768, 1024)
-y0=92 + (53 * z0 / 32) * z0 / 32768
-y1=92 + (53 * z1 / 32) * z1 / 32768
-y2=92 + (53 * z2 / 32) * z2 / 32768
-y3=92 + (53 * z3 / 32) * z3 / 32768
-bob=sin(t, 700, 1)
+fk=(mod(t, 2300) < 70 || (mod(t, 2300) > 2150 && mod(t, 2300) < 2185) || mod(t, 1300) < 22)
+tr=(fk ? {tag_dim} : {tag})
+ph=mod(t / 70, 14)
+pq=mod(t / 70 + 7, 14)
+c1=(ph < 5 ? {ring1} : (ph < 10 ? {ring2} : {ring3}))
+c2=(pq < 5 ? {ring1} : (pq < 10 ? {ring2} : {ring3}))
+al=(mod(t, 1400) < 700 ? {red} : {ring3})
 
-# ---------------------------------------------------------------- sky
-[sky]
-type=gradient
+[a]
+type=fill
 x=0
 y=0
 w=W
-h=40
-from={sky_top}
-to={sky_mid}
-dir=vertical
+h=H
+color={sky}
 
-[sky2]
-type=fill
-x=0
-y=40
-w=W
-h=52
-color={sky_mid}
-
-[st1]
-type=fill
-x=212
-y=9
-w=1
-h=1
-color={star}
-
-[st2]
-type=fill
-x=262
-y=24
-w=2
-h=1
-color={star}
-
-[st3]
-type=fill
-x=150
-y=30
-w=1
-h=1
-color={star}
-
-[sun]
-type=roundrect
-x=124
-y=42
-w=72
-h=72
-r=36
-color={sun_hi}
-
-[sun2]
-type=roundrect
-x=124
-y=52
-w=72
-h=72
-r=36
-color={sun_or}
-
-[sun3]
-type=roundrect
-x=124
-y=62
-w=72
-h=72
-r=36
-color={sun}
-
-[s1]
-type=fill
-x=120
-y=68
-w=80
-h=2
-color={sky_mid}
-
-[s2]
-type=fill
-x=120
-y=75
-w=80
-h=3
-color={sky_mid}
-
-[s3]
-type=fill
-x=120
-y=82
-w=80
-h=4
-color={sky_mid}
-
-[m1e]
-type=triangle
-x1=40
-y1=92
-x2=96
-y2=61
-x3=150
-y3=92
-color={pink}
-
-[m1]
-type=triangle
-x1=42
-y1=92
-x2=96
-y2=63
-x3=148
-y3=92
-color={mtn}
-
-[m2e]
-type=triangle
-x1=180
-y1=92
-x2=236
-y2=67
-x3=296
-y3=92
-color={pink}
-
-[m2]
-type=triangle
-x1=182
-y1=92
-x2=236
-y2=69
-x3=294
-y3=92
-color={mtn}
-
-[m3]
-type=triangle
-x1=-10
-y1=92
-x2=22
-y2=76
-x3=70
-y3=92
-color={mtn}
-
-[palmL]
-type=bitmap
-asset=palm
-x=18
-y=60
-color={pink}
-bg=none
-
-[palmR]
-type=bitmap
-asset=palm
-x=278
-y=60
-flip=1
-color={pink}
-bg=none
-
-[logo2]
+[hm]
 type=text
 x=8
-y=7
-text="NEON DRIVE"
-scale=2
+y=6
+text="HOME"
 color={cyan_dk}
 bg=none
 
-[logo]
+[bt]
 type=text
-x=6
-y=5
-text="NEON DRIVE"
-scale=2
-color={pink}
-bg=none
-
-[np]
-type=text
-x=6
-y=25
-text=(playing ? "> " : "| ") + title + " - " + artist
-maxc=36
-color={cyan}
-bg=none
-visible=playing || paused
-
-[bat]
-type=text
-x=314
-y=5
+x=154
+y=6
 text=(battery < 0 ? "--" : battery + "%")
 align=right
-color={white}
+color={dim}
 bg=none
 
-# ---------------------------------------------------------------- road (dyn)
-[ground]
+# ---------------------------------------------------------------- tags
+[t0]
+type=quad
+x=4
+y=20
+w=152
+h=22
+skew=8
+lw=2
+color=(sel == 0 ? tr : {sky})
+line=(sel == 0 ? tr : {cyan})
+
+[t1]
+type=quad
+x=4
+y=48
+w=152
+h=22
+skew=8
+lw=2
+color=(sel == 1 ? tr : {sky})
+line=(sel == 1 ? tr : {cyan})
+
+[t2]
+type=quad
+x=4
+y=76
+w=152
+h=22
+skew=8
+lw=2
+color=(sel == 2 ? tr : {sky})
+line=(sel == 2 ? tr : {cyan})
+
+[t3]
+type=quad
+x=4
+y=104
+w=152
+h=22
+skew=8
+lw=2
+color=(sel == 3 ? tr : {sky})
+line=(sel == 3 ? tr : {cyan})
+
+[t4]
+type=quad
+x=4
+y=132
+w=152
+h=22
+skew=8
+lw=2
+color=(sel == 4 ? tr : {sky})
+line=(sel == 4 ? tr : {cyan})
+
+[l0]
+type=text
+x=16
+y=27
+text="FILE BROWSER"
+color=(sel == 0 ? {white} : {cyan})
+bg=none
+
+[l1]
+type=text
+x=16
+y=55
+text="MEDIA LIBRARY"
+color=(sel == 1 ? {white} : {cyan})
+bg=none
+
+[l2]
+type=text
+x=16
+y=83
+text="PLAYING"
+color=(sel == 2 ? {white} : {cyan})
+bg=none
+
+[l3]
+type=text
+x=16
+y=111
+text="MUSIC SETTINGS"
+color=(sel == 3 ? {white} : {cyan})
+bg=none
+
+[l4]
+type=text
+x=16
+y=139
+text="SYSTEM SETTINGS"
+color=(sel == 4 ? {white} : {cyan})
+bg=none
+
+[m]
+type=list
+axis=vertical
+y=20
+height=28
+rows=5
+selected=2
+item0=FILE BROWSER:files
+item1=MEDIA LIBRARY:library
+item2=PLAYING:player
+item3=MUSIC SETTINGS:settings
+item4=SYSTEM SETTINGS:system
+visible=0
+
+# ---------------------------------------------------------------- sky
+[s1]
+type=dots
+x=164
+y=4
+w=154
+h=74
+sx=9
+sy=7
+density=24
+seed=7
+blink=650
+color={star}
+
+[s2]
+type=dots
+x=168
+y=6
+w=150
+h=60
+sx=13
+sy=11
+dw=2
+density=9
+seed=3
+blink=1100
+color={white}
+
+[r1]
+type=ring
+x=250
+y=96
+r=44 + ph
+color=c1
+
+[r2]
+type=ring
+x=250
+y=96
+r=44 + pq
+color=c2
+
+[gl]
+type=roundrect
+x=208 - sin(t, 1800, 1)
+y=54 - sin(t, 1800, 1)
+w=84 + 2 * sin(t, 1800, 1)
+h=84 + 2 * sin(t, 1800, 1)
+r=42 + sin(t, 1800, 1)
+color={ring3}
+
+[u1]
+type=roundrect
+x=210
+y=56
+w=80
+h=80
+r=40
+color={sun_hi}
+
+[u2]
+type=roundrect
+x=210
+y=68
+w=80
+h=80
+r=40
+color={sun_or}
+
+[u3]
+type=roundrect
+x=210
+y=82
+w=80
+h=80
+r=40
+color={sun}
+
+[p1]
 type=fill
-x=0
+x=204
+y=104
+w=92
+h=2
+color={sky}
+
+[p2]
+type=fill
+x=204
+y=112
+w=92
+h=3
+color={sky}
+
+[p3]
+type=fill
+x=204
+y=121
+w=92
+h=4
+color={sky}
+
+# ---------------------------------------------------------------- city
+[b1]
+type=fill
+x=162
 y=92
-w=W
-h=54
-color={ground}
-dyn=1
+w=22
+h=58
+color={bldg2}
 
-[h0]
+[b2]
 type=fill
-x=0
-y=y0
-w=W
-h=1 + z0 / 400
-color={grid}
-dyn=1
+x=184
+y=72
+w=16
+h=78
+color={bldg}
 
-[h1]
+[b3]
 type=fill
-x=0
-y=y1
-w=W
-h=1 + z1 / 400
-color={grid}
-dyn=1
+x=200
+y=106
+w=24
+h=44
+color={bldg2}
 
-[h2]
+[b4]
 type=fill
-x=0
-y=y2
-w=W
-h=1 + z2 / 400
-color={grid}
-dyn=1
+x=224
+y=120
+w=18
+h=30
+color={bldg}
 
-[h3]
+[b5]
 type=fill
-x=0
-y=y3
-w=W
-h=1 + z3 / 400
-color={grid}
-dyn=1
+x=242
+y=110
+w=16
+h=40
+color={bldg2}
 
-[v1]
-type=triangle
-x1=158
-y1=92
-x2=-150
-y2=146
-x3=-146
-y3=146
-color={grid}
-dyn=1
-
-[v2]
-type=triangle
-x1=162
-y1=92
-x2=470
-y2=146
-x3=466
-y3=146
-color={grid}
-dyn=1
-
-[road]
-type=triangle
-x1=148
-y1=92
-x2=172
-y2=92
-x3=310
-y3=146
-color={road}
-dyn=1
-
-[road2]
-type=triangle
-x1=148
-y1=92
-x2=310
-y2=146
-x3=10
-y3=146
-color={road}
-dyn=1
-
-[eL]
-type=triangle
-x1=148
-y1=92
-x2=10
-y2=146
-x3=18
-y3=146
-color={pink}
-dyn=1
-
-[eR]
-type=triangle
-x1=172
-y1=92
-x2=310
-y2=146
-x3=302
-y3=146
-color={pink}
-dyn=1
-
-[d0]
+[b6]
 type=fill
-x=160 - (1 + z0 / 200)
-y=y0
-w=2 + z0 / 100
-h=1 + z0 / 180
-color={white}
-dyn=1
+x=258
+y=86
+w=22
+h=64
+color={bldg}
 
-[d2]
+[b7]
 type=fill
-x=160 - (1 + z2 / 200)
-y=y2
-w=2 + z2 / 100
-h=1 + z2 / 180
-color={white}
-dyn=1
+x=280
+y=114
+w=16
+h=36
+color={bldg2}
+
+[b8]
+type=fill
+x=296
+y=68
+w=24
+h=82
+color={bldg}
+
+[e1]
+type=fill
+x=257
+y=86
+w=1
+h=64
+color={rim}
+
+[e2]
+type=fill
+x=241
+y=110
+w=1
+h=40
+color={rim}
+
+[w1]
+type=dots
+x=165
+y=96
+w=17
+h=52
+sx=4
+sy=5
+dw=2
+density=45
+seed=11
+color={win_y}
+
+[w2]
+type=dots
+x=187
+y=76
+w=12
+h=72
+sx=4
+sy=6
+dw=2
+density=40
+seed=12
+blink=5000
+color={win_c}
+
+[w3]
+type=dots
+x=203
+y=110
+w=19
+h=38
+sx=5
+sy=5
+dw=2
+density=50
+seed=13
+color={win_p}
+
+[w4]
+type=dots
+x=227
+y=124
+w=14
+h=24
+sx=4
+sy=5
+dw=2
+density=40
+seed=14
+color={win_y}
+
+[w5]
+type=dots
+x=245
+y=114
+w=12
+h=34
+sx=4
+sy=6
+dw=2
+density=45
+seed=15
+color={win_c}
+
+[w6]
+type=dots
+x=261
+y=90
+w=18
+h=58
+sx=4
+sy=5
+dw=2
+density=45
+seed=16
+blink=7000
+color={win_y}
+
+[w7]
+type=dots
+x=283
+y=118
+w=12
+h=30
+sx=4
+sy=5
+dw=2
+density=50
+seed=17
+color={win_p}
+
+[w8]
+type=dots
+x=299
+y=72
+w=20
+h=76
+sx=4
+sy=6
+dw=2
+density=42
+seed=18
+color={win_c}
+
+[n1]
+type=quad
+x=203
+y=118
+w=18
+h=8
+lw=1
+line={red}
+
+[a1]
+type=fill
+x=191
+y=58
+w=1
+h=14
+color={dim}
+
+[a2]
+type=fill
+x=307
+y=54
+w=1
+h=14
+color={dim}
+
+[k1]
+type=fill
+x=190
+y=56
+w=3
+h=3
+color=al
+
+[k2]
+type=fill
+x=306
+y=52
+w=3
+h=3
+color=al
+
+# ---------------------------------------------------------------- street
+[g]
+type=fill
+x=160
+y=150
+w=160
+h=20
+color={street}
+
+[gl2]
+type=fill
+x=160
+y=150
+w=160
+h=1
+color={cyan}
 
 [d1]
-type=fill
-x=160 - (1 + z1 / 200)
-y=y1
-w=2 + z1 / 100
-h=1 + z1 / 180
-color={white}
-dyn=1
-
-[d3]
-type=fill
-x=160 - (1 + z3 / 200)
-y=y3
-w=2 + z3 / 100
-h=1 + z3 / 180
-color={white}
-dyn=1
-
-[cd]
-type=bitmap
-asset=car_d
-x=128
-y=118 + bob
-color={car_dk}
-bg=none
-dyn=1
-
-[tail]
-type=fill
-x=133
-y=126 + bob
-w=54
-h=3
-color={tail}
-dyn=1
-
-[cb]
-type=bitmap
-asset=car_b
-x=128
-y=118 + bob
-color={car}
-bg=none
-dyn=1
-
-[cn]
-type=bitmap
-asset=car_n
-x=128
-y=118 + bob
-color={cyan}
-bg=none
-dyn=1
-
-# ---------------------------------------------------------------- menu bar
-[bar]
-type=fill
-x=0
-y=146
-w=W
-h=24
-color={navy}
-dyn=1
-
-[barl]
-type=fill
-x=0
-y=146
-w=W
+type=dots
+x=164
+y=158
+w=156
 h=1
-color={pink}
-dyn=1
+sx=16
+dw=9
+dh=1
+density=100
+color={cyan_dk}
 
-[items]
-type=list
-y=154
-height=14
-item0=LIBRARY:library
-item1=NOW PLAYING:player
-item2=SETTINGS:settings
-item3=MENU:menu
-sel_fg={cyan}
-sel_bg={purple}
-mark={red}
-dyn=1
+[d2]
+type=dots
+x=172
+y=164
+w=148
+h=1
+sx=22
+dw=6
+dh=1
+density=100
+color={tag_dim}

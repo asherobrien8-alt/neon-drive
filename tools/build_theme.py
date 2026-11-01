@@ -5,7 +5,7 @@ The sources use readable colour names ({pink}, {cyan}...) and comments; the
 output is compact, decimal RGB565, and checked against ReChord's engine
 limits so a skin can never be rejected on the device:
 
-  4096 bytes per skin, 52 sections, 12 props/section, 144-byte values,
+  4096 bytes per skin, 64 sections (incl. [skin]/[vars]; Neon Drive raised it from 52), 12 props/section, 144-byte values,
   20 vars total, 112-byte var expressions.
 """
 import os, re, sys
@@ -42,6 +42,20 @@ PALETTE = {
     "car_dk":   "#2a1d3f",
     "tail":     "#ff2040",
     "star":     "#c9b8ff",
+    # home city (v2)
+    "sky":      "#0d0a1c",
+    "tag":      "#ff2a3c",
+    "tag_dim":  "#7a1424",
+    "ring1":    "#ff5a4a",
+    "ring2":    "#9a2a3a",
+    "ring3":    "#3a1424",
+    "bldg":     "#231d3d",
+    "bldg2":    "#2c2450",
+    "rim":      "#ff7a4a",
+    "win_y":    "#ffd27a",
+    "win_c":    "#8fe8ff",
+    "win_p":    "#ff6fae",
+    "street":   "#151030",
     # runner
     "camo":     "#5f7f68",
     "glow":     "#1f6f68",
@@ -69,8 +83,7 @@ def compile_skin(text, name):
         line = re.sub(r"\{(\w+)\}", lambda m: COL[m.group(1)], line)
         if line.startswith("["):
             cur = line[1:-1]
-            if not cur.startswith("vars") and cur != "skin":
-                sections += 1
+            sections += 1          # the engine counts every [section]
             props = 0
             out.append(line)
             continue
@@ -84,7 +97,7 @@ def compile_skin(text, name):
             assert len(v) <= 112, "%s var %s: expr %d > 112" % (name, k, len(v))
         out.append("%s=%s" % (k, v))
     blob = "\n".join(out) + "\n"
-    assert sections <= 52, "%s: %d sections" % (name, sections)
+    assert sections <= 64, "%s: %d sections" % (name, sections)
     assert nvars <= 20, "%s: %d vars" % (name, nvars)
     assert len(blob) <= 4096, "%s: %d bytes > 4096" % (name, len(blob))
     return blob, sections, nvars

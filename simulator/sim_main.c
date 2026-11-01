@@ -174,6 +174,9 @@ static void open_files(void)
     ui_push_screen(&browser_screen);
 }
 
+/* the device's System screen needs hardware: show the classic menu there */
+static void open_system(void) { ui_pop_screen(); }
+
 static const char *dev_only(void) { return "device"; }
 
 /* same rows as the device root menu (USB storage / System need hardware) */
@@ -253,6 +256,7 @@ EXPORT("sim_init") int sim_init(void)
     menu_screen_bind(&k_root);
     ui_push_screen(&menu_screen);
     skin_home_set_actions(open_library, open_player, open_settings);
+    skin_home_set_more(open_files, open_system);
     settings_screen_set_theme_applied(home_stack_sync);
     home_stack_sync();
     ui_render();

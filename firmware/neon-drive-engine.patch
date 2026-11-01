@@ -277,6 +277,18 @@ index 0000000..24d12f8
 +    printf("%d checks, %d failures\n", s_checks, s_failures);
 +    return s_failures != 0;
 +}
+diff --git a/firmware/startup/ap_ui.c b/firmware/startup/ap_ui.c
+index 4a8fc06..32b2505 100644
+--- a/firmware/startup/ap_ui.c
++++ b/firmware/startup/ap_ui.c
+@@ -1473,6 +1473,7 @@ void ap_ui_loop(void)
+      * one that declares home=skin gets the declarative home inserted above it
+      * (BACK still reaches Files/USB/System). */
+     skin_home_set_actions(open_library, open_player, open_settings);
++    skin_home_set_more(open_files, open_system);   /* Neon Drive */
+     settings_screen_set_theme_applied(home_stack_sync);
+     home_stack_sync();
+     /* BRNOMT-87: the resume restore runs inside the loop, AFTER the first
 diff --git a/firmware/theme/tests/run_tests.sh b/firmware/theme/tests/run_tests.sh
 index c28eef9..c8b0da4 100644
 --- a/firmware/theme/tests/run_tests.sh
@@ -292,7 +304,7 @@ index c28eef9..c8b0da4 100644
  
  echo "ALL THEME TESTS PASSED"
 diff --git a/firmware/theme/theme_skin.c b/firmware/theme/theme_skin.c
-index 7098f23..5f11683 100644
+index 7098f23..2f5be29 100644
 --- a/firmware/theme/theme_skin.c
 +++ b/firmware/theme/theme_skin.c
 @@ -15,6 +15,7 @@
@@ -303,16 +315,37 @@ index 7098f23..5f11683 100644
  
  #ifdef RECHORD_AP_BUILD
  #include "../services/fs.h"
-@@ -981,6 +982,8 @@ static int action_from_word(const char *s)
+@@ -24,14 +25,14 @@
+ /* Parsed, not stored: the engine scans the text per frame, so raising this
+  * costs no RAM (the cassette theme's home needs 49). Keep it just above the
+  * largest shipped skin. */
+-#define SKIN_SECTIONS   52
++#define SKIN_SECTIONS   64   /* Neon Drive: was 52; parsed, 0 B RAM */
+ #define SKIN_PROPS      12
+ #define SKIN_KEY_MAX    20
+ #define SKIN_PROP_MAX   144
+ #define SKIN_VAL_MAX    64
+ #define SKIN_EXPR_STEPS 2048
+ #define SKIN_DEPTH      12
+-#define SKIN_ITEMS      4
++#define SKIN_ITEMS      6
+ #define SKIN_FONT_W     8
+ #define SKIN_VARS       20
+ #define SKIN_VAR_EXPR_MAX 112
+@@ -981,6 +982,12 @@ static int action_from_word(const char *s)
          return THEME_SKIN_PLAYER;
      if (key_eq(s, "settings"))
          return THEME_SKIN_SETTINGS;
 +    if (key_eq(s, "menu"))              /* Neon Drive: open the classic root menu */
 +        return THEME_SKIN_BACK;
++    if (key_eq(s, "files"))
++        return THEME_SKIN_FILES;
++    if (key_eq(s, "system"))
++        return THEME_SKIN_SYSTEM;
      return THEME_SKIN_NONE;
  }
  
-@@ -1453,6 +1456,53 @@ static const char *row_value(int idx, char *buf, int cap)
+@@ -1453,6 +1460,53 @@ static const char *row_value(int idx, char *buf, int cap)
      return 0;
  }
  
@@ -366,7 +399,7 @@ index 7098f23..5f11683 100644
  static void draw_list(int sel, int top)
  {
      const theme_layout_t *l = theme_layout();
-@@ -1484,26 +1534,36 @@ static void draw_list(int sel, int top)
+@@ -1484,26 +1538,36 @@ static void draw_list(int sel, int top)
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
              const char *value = row_value(idx, vbuf, (int)sizeof vbuf);
  
@@ -417,7 +450,7 @@ index 7098f23..5f11683 100644
              }
          }
          return;
-@@ -1535,14 +1595,20 @@ static void draw_list(int sel, int top)
+@@ -1535,14 +1599,20 @@ static void draw_list(int sel, int top)
              char lbuf[64];
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
  
@@ -443,7 +476,117 @@ index 7098f23..5f11683 100644
              }
              x += widths[i] + 16;
          }
-@@ -1651,9 +1717,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1589,6 +1659,109 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+         return;
+     }
+ 
++    /* ---- Neon Drive meters ------------------------------------------ */
++    if (key_eq(type, "quad")) {
++        /* slanted tag: parallelogram, top edge shifted right by `skew`;
++         * `color` fills (or none), `line` strokes `lw` px (optional) */
++        const char *fv = prop(sec, "color");
++        const char *lv = prop(sec, "line");
++        int sk, lw, yy;
++        uint16_t fc, lc;
++
++        x = eval_int(prop(sec, "x"), ctx, 0);
++        y = eval_int(prop(sec, "y"), ctx, 0);
++        w = eval_int(prop(sec, "w"), ctx, 0);
++        h = eval_int(prop(sec, "h"), ctx, 0);
++        sk = eval_int(prop(sec, "skew"), ctx, 0);
++        lw = eval_int(prop(sec, "lw"), ctx, 1);
++        if (w <= 0 || h <= 1)
++            return;
++        fc = color_of(fv, ctx, theme_get()->surface);
++        lc = color_of(lv, ctx, theme_get()->accent);
++        for (yy = 0; yy < h; yy++) {
++            int sh = sk * (h - 1 - yy) / (h - 1);
++            int x0 = x + sh, x1 = x + w - 1 - sk + sh;
++
++            if (lv != 0 && (yy < lw || yy >= h - lw)) {
++                display_fill_rect(x0, y + yy, x1, y + yy, lc);
++                continue;
++            }
++            if (fv != 0 && !key_eq(fv, "none"))
++                display_fill_rect(x0, y + yy, x1, y + yy, fc);
++            if (lv != 0) {
++                display_fill_rect(x0, y + yy, x0 + lw - 1, y + yy, lc);
++                display_fill_rect(x1 - lw + 1, y + yy, x1, y + yy, lc);
++            }
++        }
++        return;
++    }
++
++    if (key_eq(type, "ring")) {
++        /* circle outline centred on (x, y): radius r, thickness lw */
++        int r, lw, dy;
++        uint16_t c;
++
++        x = eval_int(prop(sec, "x"), ctx, 0);
++        y = eval_int(prop(sec, "y"), ctx, 0);
++        r = eval_int(prop(sec, "r"), ctx, 0);
++        lw = eval_int(prop(sec, "lw"), ctx, 1);
++        c = color_of(prop(sec, "color"), ctx, theme_get()->accent);
++        if (r <= 0)
++            return;
++        for (dy = -r; dy <= r; dy++) {
++            int ho = isqrt_i(r * r - dy * dy);
++            int ri = r - lw;
++
++            if (ri > 0 && dy > -ri && dy < ri) {
++                int hi = isqrt_i(ri * ri - dy * dy);
++
++                display_fill_rect(x - ho, y + dy, x - hi - 1, y + dy, c);
++                display_fill_rect(x + hi + 1, y + dy, x + ho, y + dy, c);
++            } else {
++                display_fill_rect(x - ho, y + dy, x + ho, y + dy, c);
++            }
++        }
++        return;
++    }
++
++    if (key_eq(type, "dots")) {
++        /* a deterministic scatter on a grid: lit windows, stars. Each grid
++         * cell (sx by sy) holds a dw x dh dot when hash(cell, seed) % 100 <
++         * density; with blink=N ms, about 1 in 5 dots is off at any time
++         * and the pattern shifts every N ms (twinkle). */
++        int sx, sy, dw, dh, dens, seed, blink, gx, gy;
++        uint16_t c;
++
++        x = eval_int(prop(sec, "x"), ctx, 0);
++        y = eval_int(prop(sec, "y"), ctx, 0);
++        w = eval_int(prop(sec, "w"), ctx, 0);
++        h = eval_int(prop(sec, "h"), ctx, 0);
++        sx = eval_int(prop(sec, "sx"), ctx, 4);
++        sy = eval_int(prop(sec, "sy"), ctx, 4);
++        dw = eval_int(prop(sec, "dw"), ctx, 1);
++        dh = eval_int(prop(sec, "dh"), ctx, dw);   /* square by default */
++        dens = eval_int(prop(sec, "density"), ctx, 50);
++        seed = eval_int(prop(sec, "seed"), ctx, 1);
++        blink = eval_int(prop(sec, "blink"), ctx, 0);
++        c = color_of(prop(sec, "color"), ctx, theme_get()->text);
++        if (sx <= 0 || sy <= 0)
++            return;
++        for (gy = 0; gy * sy < h; gy++)
++            for (gx = 0; gx * sx < w; gx++) {
++                unsigned hv = (unsigned)gx * 73856093u ^ (unsigned)gy * 19349663u ^
++                              (unsigned)seed * 83492791u;
++
++                hv ^= hv >> 13; hv *= 0x5bd1e995u; hv ^= hv >> 15;
++                if ((int)(hv % 100u) >= dens)
++                    continue;
++                if (blink > 0 && (((hv >> 8) + ctx->now / (unsigned)blink) % 5u) == 0u)
++                    continue;
++                display_fill_rect(x + gx * sx, y + gy * sy,
++                                  x + gx * sx + dw - 1, y + gy * sy + dh - 1, c);
++            }
++        return;
++    }
++
+     if (key_eq(type, "fill")) {
+         x = eval_int(prop(sec, "x"), ctx, 0);
+         y = eval_int(prop(sec, "y"), ctx, 0);
+@@ -1651,9 +1824,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
          ctx->ah = ah;
          x = eval_int(prop(sec, "x"), ctx, 0);
          y = eval_int(prop(sec, "y"), ctx, 0);
@@ -488,7 +631,7 @@ index 7098f23..5f11683 100644
          return;
      }
  
-@@ -1681,12 +1779,19 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1681,12 +1886,19 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
              /* Optional right alignment: `x` is the right edge. The mockups
               * need it for counters, volume and i/N (the engine has no text
               * measuring helper for themes). */
@@ -512,7 +655,7 @@ index 7098f23..5f11683 100644
          return;
      }
  
-@@ -1719,6 +1824,18 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1719,6 +1931,18 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
      }
  
      if (key_eq(type, "list")) {
@@ -531,6 +674,30 @@ index 7098f23..5f11683 100644
          draw_list(sel, ctx->top);
          return;
      }
+diff --git a/firmware/theme/theme_skin.h b/firmware/theme/theme_skin.h
+index 7fb56fd..f5cd099 100644
+--- a/firmware/theme/theme_skin.h
++++ b/firmware/theme/theme_skin.h
+@@ -32,7 +32,7 @@
+ #include <stdint.h>
+ 
+ #define THEME_SKIN_TEXT_MAX  4096
+-#define THEME_SKIN_ITEMS_MAX 4
++#define THEME_SKIN_ITEMS_MAX 6
+ 
+ /* Interpreter revision, logged at boot so a device can prove which engine is
+  * running (v2 = vector roundrect/triangle + [vars]). */
+@@ -53,7 +53,9 @@ enum {
+     THEME_SKIN_BACK,
+     THEME_SKIN_LIBRARY,
+     THEME_SKIN_PLAYER,
+-    THEME_SKIN_SETTINGS
++    THEME_SKIN_SETTINGS,
++    THEME_SKIN_FILES,           /* Neon Drive: file browser */
++    THEME_SKIN_SYSTEM           /* Neon Drive: System menu   */
+ };
+ 
+ /* Read-only state exposed to skin expressions. The UI adapter fills it; the
 diff --git a/firmware/ui/screens/az_screen.c b/firmware/ui/screens/az_screen.c
 new file mode 100644
 index 0000000..a65556f
@@ -1170,6 +1337,54 @@ index 0000000..63e7db0
 +    sq_handle_event,
 +    0,
 +};
+diff --git a/firmware/ui/screens/skin_screen.c b/firmware/ui/screens/skin_screen.c
+index 9a9f87e..7668226 100644
+--- a/firmware/ui/screens/skin_screen.c
++++ b/firmware/ui/screens/skin_screen.c
+@@ -21,6 +21,16 @@ static void (*s_open_lib)(void);
+ static void (*s_open_np)(void);
+ static void (*s_open_set)(void);
+ 
++static void (*s_open_files)(void);
++static void (*s_open_sys)(void);
++
++/* Neon Drive: optional home actions "files" and "system" */
++void skin_home_set_more(void (*files)(void), void (*system)(void))
++{
++    s_open_files = files;
++    s_open_sys = system;
++}
++
+ void skin_home_set_actions(void (*library)(void),
+                            void (*player)(void),
+                            void (*settings)(void))
+@@ -107,6 +117,14 @@ static void skin_handle_event(const input_event_t *ev)
+         if (s_open_set)
+             s_open_set();
+         break;
++    case THEME_SKIN_FILES:
++        if (s_open_files)
++            s_open_files();
++        break;
++    case THEME_SKIN_SYSTEM:
++        if (s_open_sys)
++            s_open_sys();
++        break;
+     default:
+         break;
+     }
+diff --git a/firmware/ui/screens/skin_screen.h b/firmware/ui/screens/skin_screen.h
+index 6a65287..e9599ad 100644
+--- a/firmware/ui/screens/skin_screen.h
++++ b/firmware/ui/screens/skin_screen.h
+@@ -18,6 +18,7 @@ void skin_home_set_actions(void (*library)(void),
+ 
+ /* Feed the millisecond clock used by skin expressions. Called once per UI
+  * pass; cheap. */
++void skin_home_set_more(void (*files)(void), void (*system)(void));
+ void skin_home_tick(unsigned now_ms);
+ 
+ /* Repaint just the package's dynamic primitives (0 = no dyn rects). */
 diff --git a/firmware/ui/screens/theme_ui.c b/firmware/ui/screens/theme_ui.c
 index bed6ed3..bba0855 100644
 --- a/firmware/ui/screens/theme_ui.c

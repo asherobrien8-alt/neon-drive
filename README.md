@@ -2,7 +2,7 @@
 
 A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 
-- **Live wallpaper home screen.** An 80s wedge car cruises a neon road into a striped sunset, with pink palms and a scrolling grid.
+- **Live home screen.** Five slanted neon tags (File Browser, Media Library, Playing, Music Settings, System Settings). The selected one glows red and flickers like a real neon tube. Next to them is a night city with lit windows, blinking antenna lights, twinkling stars and a striped sun that glows, with rings radiating out from it.
 - **Volume runner.** On Now Playing, a glowing runner stands on the volume track. Turn it up and he sprints right; turn it down and he sprints left.
 - **Cyber settings.** Terminal-style `SYS://CONFIG` screen.
 - **Search.** Library → Search: spin letters with VOL, add with PLAY, and matches (title, artist or album) show up live as you type.
@@ -67,18 +67,19 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 
 **Step 3: first boot**
 
-1. On the home screen pick **MENU → System → Rebuild index** so the library finds your songs (do this again whenever you add music).
+1. On the home screen pick **SYSTEM SETTINGS → Rebuild index** so the library finds your songs (do this again whenever you add music).
 2. Put the microSD card back.
 
 ### Controls
 
 | | |
 |---|---|
-| VOL + / − | move through menus · change volume on Now Playing · spin letters in Search |
+| VOL + / − | move up / down through menus · change volume on Now Playing · spin letters in Search |
 | PLAY | open / select · add a letter in Search |
 | hold PLAY | A-Z jump in lists · show results in Search |
 | BACK | go back |
-| MENU (home bar) | full menu: Files, USB storage, System |
+| MENU button | quick settings (shuffle, repeat, playlist) |
+| BACK on the home screen | classic menu: Files, USB storage, System |
 | Power, short press | screen off / on |
 
 ### Going back to stock

@@ -22,8 +22,8 @@ STEP 2 - THEME
  3. Eject, unplug. The theme loads on the next start.
 
 STEP 3 - FIRST START
- 1. On the home screen go to SYSTEM SETTINGS -> Rebuild index.
-    (Do this again whenever you add new music.)
+ 1. On the home screen go to SYSTEM -> Rebuild library.
+    (Do this again whenever you add new music or playlists.)
  2. Put the microSD card back in.
 
 CONTROLS
@@ -32,10 +32,18 @@ CONTROLS
  hold PLAY        A-Z jump in any long list (artists, albums, songs)
  BACK             go back (on the home screen: the full menu)
  MENU             quick settings (shuffle, repeat, playlist)
+ hold POWER       power-off animation, then off
  Search           MEDIA LIBRARY -> Search. VOL picks a letter, PLAY adds it,
                   BACK deletes, hold PLAY for the results.
 
-PLAYS: FLAC, MP3, WAV.  NOT YET: M4A/AAC, OGG, APE, DSD, Bluetooth, USB DAC.
+PLAYLISTS
+ Put .m3u / .m3u8 playlist files in a folder called "Playlists" at the top of
+ the player. Songs stay in Music (one copy each); the playlist just points at
+ them. Then SYSTEM -> Rebuild library. They show up in MEDIA LIBRARY -> Playlists.
+ Hold PLAY on a song inside an album or playlist to add it to Favorites.
+
+PLAYS: FLAC, MP3, WAV.  NOT YET: M4A/AAC, OGG, APE, DSD.
+Bluetooth headphones work too (still early).
 
 GOING BACK TO NORMAL
  Copy the official FiiO HIFIECxx.IMG (from step 2 of "Before you start") onto the

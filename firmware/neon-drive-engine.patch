@@ -1,8 +1,16 @@
 diff --git a/firmware/ap.mk b/firmware/ap.mk
-index 00dbdb6..47fd08d 100644
+index 120dc94..bac551e 100644
 --- a/firmware/ap.mk
 +++ b/firmware/ap.mk
-@@ -93,6 +93,8 @@ AP_UI_SRCS := \
+@@ -78,6 +78,7 @@ AP_STARTUP_SRCS := \
+   firmware/startup/ap_startup.c \
+   firmware/startup/ap_main.c \
+   firmware/startup/ap_ui.c \
++  firmware/startup/neon_fx.c \
+   firmware/startup/mem_probe.c \
+   firmware/startup/overlay_demo.c \
+   firmware/startup/cdc_overlay.c
+@@ -93,6 +94,8 @@ AP_UI_SRCS := \
    firmware/ui/screens/settings_screen.c \
    firmware/ui/screens/library_screen.c \
    firmware/ui/screens/library_cat_screen.c \
@@ -11,11 +19,255 @@ index 00dbdb6..47fd08d 100644
    firmware/ui/screens/skin_screen.c \
    firmware/ui/screens/quick_screen.c \
    firmware/ui/screens/eq_screen.c \
+diff --git a/firmware/services/art_pack.c b/firmware/services/art_pack.c
+index 0acfd29..a335740 100644
+--- a/firmware/services/art_pack.c
++++ b/firmware/services/art_pack.c
+@@ -395,3 +395,50 @@ int art_pack_draw(int x, int y, int large)
+     fs_close(f);
+     return left == 0u ? 0 : -1;
+ }
++
++/* ---- Neon Drive: raw RGB565 pictures ------------------------------------
++ * Stream a w x h window of a raw little-endian RGB565 file (stride sw pixels,
++ * window origin sx,sy) to the framebuffer at (x,y), through the same 512 B
++ * sector buffer the cover art uses: no new RAM, no decoding. Rows are read
++ * in order, so the seeks only move forward (cheap since fs_seek keeps the
++ * cluster walk). `pump` (optional) runs every few rows to keep audio fed. */
++int art_pack_blit_file(const char *path, int x, int y, int w, int h,
++                       int sx, int sy, int sw, void (*pump)(void))
++{
++    fs_file_t *f;
++    int r;
++
++    if (path == 0 || w <= 0 || h <= 0 || sw < w || sx < 0 || sy < 0)
++        return -1;
++    f = fs_open_read(path);
++    if (f == 0)
++        return -1;
++    for (r = 0; r < h; r++) {
++        long off = ((long)(sy + r) * sw + sx) * 2L;
++        uint32_t left = (uint32_t)w * 2u;
++        int col = 0;
++
++        if (y + r >= DISPLAY_H)
++            break;
++        if ((r == 0 || w != sw) && fs_seek(f, off) != off)
++            break;
++        while (left > 0u) {
++            uint32_t chunk = left > HDR_BYTES ? HDR_BYTES : left;
++            long n = fs_read(f, s_buf, chunk);
++
++            if (n <= 1)
++                goto done;
++            n &= ~1L;
++            if (y + r >= 0)
++                display_blit_span(x + col, y + r, (int)(n / 2),
++                                  (const uint16_t *)(const void *)s_buf);
++            col += (int)(n / 2);
++            left -= (uint32_t)n;
++        }
++        if (pump != 0 && (r & 15) == 15)
++            pump();
++    }
++done:
++    fs_close(f);
++    return 0;
++}
+diff --git a/firmware/services/art_pack.h b/firmware/services/art_pack.h
+index 5051887..3eaf2b0 100644
+--- a/firmware/services/art_pack.h
++++ b/firmware/services/art_pack.h
+@@ -63,4 +63,8 @@ int  art_pack_dim(int large);    /* stored size in px (0 when unknown) */
+  * Returns 0 when drawn, < 0 when unavailable (caller draws a placeholder). */
+ int  art_pack_draw(int x, int y, int large);
+ 
++/* Neon Drive: blit a window of a raw RGB565 (LE) file; see art_pack.c. */
++int  art_pack_blit_file(const char *path, int x, int y, int w, int h,
++                        int sx, int sy, int sw, void (*pump)(void));
++
+ #endif /* RECHORD_SERVICES_ART_PACK_H */
+diff --git a/firmware/services/eq_profile.c b/firmware/services/eq_profile.c
+index 9376c6b..93712f4 100644
+--- a/firmware/services/eq_profile.c
++++ b/firmware/services/eq_profile.c
+@@ -13,7 +13,7 @@
+ #include "fs.h"
+ #include "rechord_files.h"
+ 
+-#define EQ_BUILTIN_COUNT 5
++#define EQ_BUILTIN_COUNT 12
+ #define EQ_TEXT_MAX      512
+ 
+ /* ISO 10-band centre frequencies (Hz). */
+@@ -28,13 +28,27 @@ static const int8_t s_builtin_gain[EQ_BUILTIN_COUNT][EQ_BANDS_MAX] = {
+     /* Rock  */ { 40, 30, 10, -10, -20, -10, 10, 30, 40, 30 },
+     /* Jazz  */ { 30, 20, 10, 20, -10, -10, 0, 10, 20, 20 },
+     /* EDM   */ { 50, 40, 20, 0, -10, -10, 0, 10, 20, 20 },
+-    /* Vocal */ { -20, -10, 0, 10, 30, 30, 20, 10, 0, -10 }
++    /* Vocal */ { -20, -10, 0, 10, 30, 30, 20, 10, 0, -10 },
++    /* Neon Drive presets (tenths of dB; 31/62/125/250/500/1k/2k/4k/8k/16k) */
++    /* Bass Boost   */ { 60, 55, 40, 15, 0, 0, 0, 0, 0, 0 },
++    /* Bass Max     */ { 90, 80, 55, 20, -10, 0, 0, 0, 10, 10 },
++    /* Vocal Boost  */ { -20, -15, -10, 0, 20, 40, 45, 30, 10, 0 },
++    /* Treble Boost */ { 0, 0, 0, 0, 0, 0, 10, 30, 50, 60 },
++    /* Loudness     */ { 50, 40, 15, 0, -10, -10, 0, 15, 35, 40 },
++    /* Synthwave    */ { 45, 40, 20, -5, -15, -5, 10, 25, 35, 30 },
++    /* Late Night   */ { -10, 0, 10, 15, 20, 20, 10, 0, -15, -25 },
+ };
+ 
+-static const char s_builtin_name[EQ_BUILTIN_COUNT][8] = {
+-    "Flat", "Rock", "Jazz", "EDM", "Vocal"
++static const char s_builtin_name[EQ_BUILTIN_COUNT][13] = {
++    "Flat", "Rock", "Jazz", "EDM", "Vocal", "Bass Boost", "Bass Max",
++    "Vocal Boost", "Treble Boost", "Loudness", "Synthwave", "Late Night"
+ };
+ 
++int eq_profile_builtin_count(void)
++{
++    return EQ_BUILTIN_COUNT;
++}
++
+ /* ---- AP state (kept small: the AP .bss ceiling is the tight budget) ---- */
+ static eq_curve_t s_active;
+ static char       s_name[EQ_PROFILE_NAME_MAX];
+diff --git a/firmware/services/eq_profile.h b/firmware/services/eq_profile.h
+index 1615453..4d1c256 100644
+--- a/firmware/services/eq_profile.h
++++ b/firmware/services/eq_profile.h
+@@ -48,6 +48,8 @@ int eq_profile_save(void);
+ 
+ /* Rows the picker shows: 5 built-ins followed by every present custom slot. */
+ int eq_profile_count(void);
++/* Number of built-in presets (they come first in the picker). */
++int eq_profile_builtin_count(void);
+ const char *eq_profile_entry_name(int index);
+ int eq_profile_entry_is_custom(int index);
+ 
+diff --git a/firmware/services/fs_target.c b/firmware/services/fs_target.c
+index 4d1e1a4..5feea13 100644
+--- a/firmware/services/fs_target.c
++++ b/firmware/services/fs_target.c
+@@ -560,13 +560,17 @@ long fs_seek(fs_file_t *f, long offset)
+     if (offset > (long)f->size)
+         offset = (long)f->size;   /* legal; reads past end report EOF */
+     f->pos = (uint32_t)offset;
+-    /* Reset the cluster walk to the file's FIRST cluster so the next fs_read
+-     * re-derives from (first, pos). Setting clus=0 here (old bug) made the
+-     * walk start at cluster 0 instead of first, so any read after a seek
+-     * pulled the wrong clusters (garbage) -> every FLAC failed with FORMAT
+-     * (its metadata walk seeks constantly). */
+-    f->cidx = 0;
+-    f->clus = f->first;
++    /* Neon Drive: keep the cluster walk. fs_read() restarts from the FIRST
++     * cluster by itself when the target lies behind the cached one
++     * (want < cidx), and walks forward otherwise. Resetting here made every
++     * seek re-walk the chain from the start, so reading record i of the
++     * media index cost O(i) FAT lookups (a full index read was quadratic:
++     * the 3-5 s waits when opening library lists). The (clus, cidx) pair is
++     * always consistent, so a forward seek can continue from it. */
++    if (f->clus < 2u) {
++        f->cidx = 0;
++        f->clus = f->first;
++    }
+     return offset;
+ }
+ 
+diff --git a/firmware/services/media_db.c b/firmware/services/media_db.c
+index 36d894f..135bcbb 100644
+--- a/firmware/services/media_db.c
++++ b/firmware/services/media_db.c
+@@ -96,8 +96,33 @@ static int verify_hdr(int which, const media_hdr_t *h)
+     return crc == h->crc;
+ }
+ 
++/* Neon Drive: the full-file CRC pass ran on EVERY open (every library list,
++ * every play), doubling the index reads. Remember the last slot/header that
++ * passed; the same header (seq + crc + count) is not re-streamed. A rebuild
++ * (begin/end) or media_db_forget() drops the memo. */
++static int         s_ok_which = -1;
++static media_hdr_t s_ok_hdr;
++
++static int verified(int which, const media_hdr_t *h)
++{
++    if (s_ok_which == which && s_ok_hdr.seq == h->seq &&
++        s_ok_hdr.crc == h->crc && s_ok_hdr.count == h->count)
++        return 1;
++    if (!verify_hdr(which, h))
++        return 0;
++    s_ok_which = which;
++    s_ok_hdr = *h;
++    return 1;
++}
++
++void media_db_forget(void)
++{
++    s_ok_which = -1;
++}
++
+ int media_db_begin(void *buf, uint32_t bytes)
+ {
++    media_db_forget();
+     media_hdr_t a, b;
+     int have_a, have_b;
+     media_hdr_t *cur = 0;
+@@ -226,10 +251,10 @@ int media_db_open(void)
+      * whose global CRC fails (a torn header, a damaged record) must fall back
+      * to the other one instead of reporting "no index". */
+     if ((first == 0 ? have_a : have_b) &&
+-        read_hdr(first, &h) && verify_hdr(first, &h)) {
++        read_hdr(first, &h) && verified(first, &h)) {
+         which = first;
+     } else if ((second == 0 ? have_a : have_b) &&
+-               read_hdr(second, &h) && verify_hdr(second, &h)) {
++               read_hdr(second, &h) && verified(second, &h)) {
+         which = second;
+     } else {
+         return FS_ERR_OPEN;
+diff --git a/firmware/services/media_db.h b/firmware/services/media_db.h
+index e01b6f5..bfa142e 100644
+--- a/firmware/services/media_db.h
++++ b/firmware/services/media_db.h
+@@ -92,6 +92,8 @@ void     media_db_abort(void);
+  * (which streams by offset). media_db_open() returns 0 when an index exists;
+  * FS_ERR_OPEN when there is none (or both are corrupt). */
+ int      media_db_open(void);
++/* Forget the cached "CRC already verified" result (after USB storage). */
++void     media_db_forget(void);
+ uint32_t media_db_count(void);
+ int      media_db_get(uint32_t i, media_rec_t *out);
+ void     media_db_close(void);
 diff --git a/firmware/services/media_query.c b/firmware/services/media_query.c
-index f7fae68..f47d4b6 100644
+index b45e94a..0aec6ea 100644
 --- a/firmware/services/media_query.c
 +++ b/firmware/services/media_query.c
-@@ -440,3 +440,121 @@ void mq_done(void)
+@@ -138,6 +138,7 @@ const char *mq_category_name(int cat)
+     case MQ_LABEL:        return "Label";
+     case MQ_ALBUM_ARTIST: return "Album Artist";
+     case MQ_COMPOSER:     return "Composer";
++    case MQ_PLAYLISTS:    return "Playlist";
+     case MQ_FAVORITES:    return "Favorites";
+     case MQ_RECENT:       return "Recently played";
+     case MQ_MOST_PLAYED:  return "Most played";
+@@ -524,8 +525,17 @@ int mq_folder_init(const char *prefix)
+     return mq_folder_init_start(prefix, 0, 0);
+ }
+ 
++static unsigned s_generation = 1u;
++
++unsigned mq_generation(void)
++{
++    return s_generation;
++}
++
+ void mq_done(void)
+ {
++    if (++s_generation == 0u)
++        s_generation = 1u;
+     media_db_close();
+     if (s_cells != 0 || s_idx != 0) {
+         scratch_release(SCRATCH_OWNER_INDEX);
+@@ -537,3 +547,389 @@ void mq_done(void)
      s_cap = 0;
      s_truncated = 0;
  }
@@ -137,14 +389,286 @@ index f7fae68..f47d4b6 100644
 +            n++;
 +    return n;
 +}
++
++/* ---- Neon Drive: playlists (.m3u / .m3u8) ------------------------------
++ *
++ * One copy of every song, any number of playlists (iPod-style): a playlist
++ * is a text file of paths in /Internal/Playlists or /SD/Playlists, and its
++ * entries are matched to media-index records by path. Accepted entry forms:
++ *   /Internal/Music/A/x.flac  (device path)      Internal/Music/A/x.flac
++ *   ../Music/A/x.flac         (relative to the playlist's folder)
++ *   Music/A/x.flac            (relative to the playlist's volume)
++ * Backslashes count as '/', matching ignores ASCII case (FAT does). Lines
++ * starting with '#' (#EXTM3U, #EXTINF) are skipped. Missing songs are
++ * dropped silently; the order of the file is kept. */
++
++#define MQ_PL_DIR_INT "/Internal/Playlists"
++#define MQ_PL_DIR_SD  "/SD/Playlists"
++
++typedef struct { uint32_t hash; uint16_t pos; } mq_pl_ent_t;
++
++static uint32_t pl_hash(const char *s)
++{
++    uint32_t h = 2166136261u;
++
++    for (; *s; s++) {
++        unsigned char c = (unsigned char)*s;
++
++        if (c == '\\')
++            c = '/';
++        if (c >= 'A' && c <= 'Z')
++            c = (unsigned char)(c + 32);
++        h = (h ^ c) * 16777619u;
++    }
++    return h;
++}
++
++static int pl_is_list(const char *name, char *base, unsigned cap)
++{
++    size_t n = strlen(name);
++    size_t k;
++
++    if (n > 5 && (strcmp(name + n - 5, ".m3u8") == 0 || strcmp(name + n - 5, ".M3U8") == 0))
++        k = n - 5;
++    else if (n > 4 && (strcmp(name + n - 4, ".m3u") == 0 || strcmp(name + n - 4, ".M3U") == 0))
++        k = n - 4;
++    else
++        return 0;
++    if (name[0] == '.' || k == 0)
++        return 0;                       /* macOS ._ files and the like */
++    if (k > cap - 1u)
++        k = cap - 1u;
++    memcpy(base, name, k);
++    base[k] = '\0';
++    return 1;
++}
++
++static int pl_list_cb(const char *name, int is_dir)
++{
++    char base[MQ_CELL];
++    unsigned k;
++
++    if (is_dir || !pl_is_list(name, base, sizeof base))
++        return 0;
++    for (k = 0; k < s_count; k++)
++        if (strcmp(s_cells + k * MQ_CELL, base) == 0)
++            return 0;
++    if (s_count >= s_cap)
++        return 1;
++    memset(s_cells + s_count * MQ_CELL, 0, MQ_CELL);
++    memcpy(s_cells + s_count * MQ_CELL, base, strlen(base));
++    s_count++;
++    return 0;
++}
++
++int mq_playlists_init(void)
++{
++    mq_done();
++    s_cells = scratch_claim(SCRATCH_OWNER_INDEX);
++    if (s_cells == 0)
++        return FS_ERR_IO;
++    s_key = 0;
++    s_cap = SCRATCH_BYTES / MQ_CELL;
++    s_count = 0;
++    s_truncated = 0;
++    (void)fs_list_dir_each(MQ_PL_DIR_INT, pl_list_cb);
++    (void)fs_list_dir_each(MQ_PL_DIR_SD, pl_list_cb);
++    sort_names();
++    return 0;
++}
++
++/* Normalize one playlist line to the index key form ("Internal/Music/..."). */
++static int pl_normalize(const char *line, const char *vol, char *out, unsigned cap)
++{
++    char tmp[MEDIA_PATH_MAX + 16];
++    char *seg[24];
++    unsigned nseg = 0, i, o = 0;
++    char *p;
++
++    while (*line == ' ' || *line == '\t')
++        line++;
++    if (line[0] == '\0' || line[0] == '#')
++        return 0;
++    if (strlen(line) >= sizeof tmp - 16u)
++        return 0;
++    if (line[0] == '/' || line[0] == '\\') {
++        snprintf(tmp, sizeof tmp, "%s", line + 1);              /* device path */
++    } else if (strncmp(line, "../", 3) == 0 || strncmp(line, "..\\", 3) == 0 ||
++               strncmp(line, "./", 2) == 0) {
++        snprintf(tmp, sizeof tmp, "%s/Playlists/%s", vol, line); /* relative */
++    } else if ((strncmp(line, "Internal", 8) == 0 || strncmp(line, "SD", 2) == 0) &&
++               (line[line[0] == 'S' ? 2 : 8] == '/' || line[line[0] == 'S' ? 2 : 8] == '\\')) {
++        snprintf(tmp, sizeof tmp, "%s", line);
++    } else {
++        snprintf(tmp, sizeof tmp, "%s/%s", vol, line);           /* volume-relative */
++    }
++    for (p = tmp; *p; p++)
++        if (*p == '\\')
++            *p = '/';
++    /* resolve "." and ".." */
++    p = tmp;
++    while (*p && nseg < 24u) {
++        char *s = p;
++
++        while (*p && *p != '/')
++            p++;
++        if (*p)
++            *p++ = '\0';
++        if (s[0] == '\0' || strcmp(s, ".") == 0)
++            continue;
++        if (strcmp(s, "..") == 0) {
++            if (nseg > 0u)
++                nseg--;
++            continue;
++        }
++        seg[nseg++] = s;
++    }
++    for (i = 0; i < nseg; i++) {
++        size_t n = strlen(seg[i]);
++
++        if (o + n + 2u > cap)
++            return 0;
++        if (i)
++            out[o++] = '/';
++        memcpy(out + o, seg[i], n);
++        o += (unsigned)n;
++    }
++    out[o] = '\0';
++    return o > 0u;
++}
++
++static int pl_ent_cmp_insert(mq_pl_ent_t *e, unsigned n, mq_pl_ent_t v)
++{
++    unsigned j = n;
++
++    while (j > 0 && e[j - 1].hash > v.hash) {
++        e[j] = e[j - 1];
++        j--;
++    }
++    e[j] = v;
++    return 0;
++}
++
++int mq_playlist_init(const char *name)
++{
++    static const char *const k_dirs[2][2] = {
++        { MQ_PL_DIR_INT, "Internal" }, { MQ_PL_DIR_SD, "SD" } };
++    static const char *const k_ext[2] = { ".m3u8", ".m3u" };
++    char path[96], line[MEDIA_PATH_MAX + 16], key[MEDIA_PATH_MAX + 4];
++    fs_file_t *f = 0;
++    const char *vol = "Internal";
++    mq_pl_ent_t *ent;
++    unsigned cap, nent = 0, lp = 0, i, d, e;
++    uint8_t buf[256];
++    long got;
++
++    mq_done();
++    s_idx = (uint16_t *)scratch_claim(SCRATCH_OWNER_INDEX);
++    if (s_idx == 0)
++        return FS_ERR_IO;
++    s_key = 0;
++    cap = SCRATCH_BYTES / (unsigned)(sizeof(uint16_t) + sizeof(mq_pl_ent_t));
++    ent = (mq_pl_ent_t *)(void *)((uint8_t *)s_idx + cap * sizeof(uint16_t));
++    s_cap = cap;
++    s_count = 0;
++    s_truncated = 0;
++    for (d = 0; d < 2u && f == 0; d++)
++        for (e = 0; e < 2u && f == 0; e++) {
++            snprintf(path, sizeof path, "%s/%s%s", k_dirs[d][0], name, k_ext[e]);
++            f = fs_open_read(path);
++            if (f != 0)
++                vol = k_dirs[d][1];
++        }
++    if (f == 0)
++        return FS_ERR_OPEN;
++    /* pass 1: the entries, as (hash, position) sorted by hash */
++    while ((got = fs_read(f, buf, sizeof buf)) > 0) {
++        for (i = 0; i < (unsigned)got; i++) {
++            char c = (char)buf[i];
++
++            if (c == '\n' || c == '\r') {
++                line[lp] = '\0';
++                lp = 0;
++                if (nent < cap && pl_normalize(line, vol, key, sizeof key)) {
++                    mq_pl_ent_t v;
++
++                    v.hash = pl_hash(key);
++                    v.pos = (uint16_t)nent;
++                    pl_ent_cmp_insert(ent, nent, v);
++                    nent++;
++                } else if (nent >= cap) {
++                    s_truncated = 1;
++                }
++                continue;
++            }
++            if (lp < sizeof line - 1u)
++                line[lp++] = c;
++        }
++    }
++    if (lp > 0u && nent < cap) {
++        line[lp] = '\0';
++        if (pl_normalize(line, vol, key, sizeof key)) {
++            mq_pl_ent_t v;
++
++            v.hash = pl_hash(key);
++            v.pos = (uint16_t)nent;
++            pl_ent_cmp_insert(ent, nent, v);
++            nent++;
++        }
++    }
++    fs_close(f);
++    if (nent == 0u)
++        return 0;
++    for (i = 0; i < nent; i++)
++        s_idx[i] = 0xFFFFu;
++    /* pass 2: one walk over the index fills each playlist position */
++    if (media_db_open() != FS_OK) {
++        mq_done();
++        return FS_ERR_OPEN;
++    }
++    {
++        uint32_t total = media_db_count(), r;
++
++        for (r = 0; r < total && r < 0xFFFFu; r++) {
++            media_rec_t rec;
++            uint32_t h;
++            unsigned lo = 0, hi = nent;
++
++            if (media_db_get(r, &rec) != FS_OK)
++                break;
++            if (s_pump != 0 && (r & (MQ_PUMP_EVERY - 1u)) == 0u)
++                s_pump();
++            h = pl_hash(rec.path);
++            while (lo < hi) {                 /* first entry with this hash */
++                unsigned mid = (lo + hi) / 2u;
++
++                if (ent[mid].hash < h)
++                    lo = mid + 1u;
++                else
++                    hi = mid;
++            }
++            for (; lo < nent && ent[lo].hash == h; lo++)
++                s_idx[ent[lo].pos] = (uint16_t)r;
++        }
++    }
++    /* keep the file's order, drop songs that are not in the index */
++    for (i = 0; i < nent; i++)
++        if (s_idx[i] != 0xFFFFu)
++            s_idx[s_count++] = s_idx[i];
++    return 0;
++}
 diff --git a/firmware/services/media_query.h b/firmware/services/media_query.h
-index 2c0d911..b42c58f 100644
+index 2926dc9..16932dc 100644
 --- a/firmware/services/media_query.h
 +++ b/firmware/services/media_query.h
-@@ -71,6 +71,28 @@ int mq_folder_init_start(const char *prefix, const char *target,
+@@ -85,6 +85,41 @@ int mq_folder_init_start(const char *prefix, const char *target,
  /* Release the scratch region and drop the current query. */
  void mq_done(void);
  
++/* Neon Drive: changes whenever the live query is released/replaced, so a
++ * screen can tell its list is still the one in scratch (skip a re-read). */
++unsigned mq_generation(void);
++
 +/* ---- Neon Drive: Search + A-Z jump ------------------------------------- */
 +
 +/* Filter mode: every record whose title, artist or album CONTAINS `query`
@@ -167,28 +691,93 @@ index 2c0d911..b42c58f 100644
 +/* Initial of an arbitrary string, using the same rule ('A'..'Z' or '#'). */
 +char     mq_initial_of(const char *s);
 +
++/* ---- Neon Drive: playlists --------------------------------------------- */
++/* Names mode: the playlist files (*.m3u, *.m3u8) in /Internal/Playlists and
++ * /SD/Playlists, without the extension, sorted. */
++int mq_playlists_init(void);
++/* Filter mode in FILE order: the songs of playlist `name` that exist in the
++ * index (see media_query.c for the accepted path forms). */
++int mq_playlist_init(const char *name);
++#define MQ_PLAYLISTS (MQ_LIBRARY_ITEMS + 0)   /* library_cat pseudo-category */
++
  /* Optional pump called every few index records while a query scans the index.
   * The scan is a long blocking loop of media_db_get() calls; without pumping,
   * the player stops refilling the PCM ring and an underrun cuts the audio (at
 diff --git a/firmware/services/tests/run_tests.sh b/firmware/services/tests/run_tests.sh
-index 7e21896..64ffa8c 100644
+index 32bd5fd..8e9e1dc 100644
 --- a/firmware/services/tests/run_tests.sh
 +++ b/firmware/services/tests/run_tests.sh
-@@ -38,6 +38,8 @@ $CC $CFLAGS -I.. -I../.. -o .work/test_art_pack test_art_pack.c ../art_pack.c ..
+@@ -47,6 +47,8 @@ $CC $CFLAGS -I.. -I../.. -o .work/test_art_pack test_art_pack.c ../art_pack.c ..
  .work/test_scratch
  .work/test_media_db
  .work/test_media_query
-+$CC $CFLAGS -I.. -o .work/test_search_az test_search_az.c ../media_db.c ../media_query.c ../scratch.c ../fs_host.c
++$CC $CFLAGS -I.. -o .work/test_search_az test_search_az.c ../media_db.c ../media_query.c ../library_extras.c ../scratch.c ../fs_host.c ../file_io.c
 +.work/test_search_az
  .work/test_media_scan
  .work/test_eq_profile
- .work/test_art_pack
+ .work/test_bt_proto
+diff --git a/firmware/services/tests/test_eq_profile.c b/firmware/services/tests/test_eq_profile.c
+index 973ee11..da6edd2 100644
+--- a/firmware/services/tests/test_eq_profile.c
++++ b/firmware/services/tests/test_eq_profile.c
+@@ -216,13 +216,13 @@ static void test_service(void)
+     pub_calls = 0;
+     eq_profile_set_publisher(recorder);
+     CHECK(eq_profile_boot() == 0, "boot");
+-    CHECK(eq_profile_count() == 7, "5 built-ins + custom1 + custom2");
++    CHECK(eq_profile_count() == 14, "12 built-ins + custom1 + custom2");
+     CHECK(eq_profile_enabled() == 0, "boot starts disabled");
+     CHECK(strcmp(eq_profile_name(), "Flat") == 0, "default profile name");
+     CHECK(pub_calls == 1, "boot publishes the curve");
+ 
+-    CHECK(eq_profile_entry_is_custom(5) == 1, "row 5 is custom");
+-    CHECK(strcmp(eq_profile_entry_name(5), "Rock") == 0,
++    CHECK(eq_profile_entry_is_custom(12) == 1, "row 12 is custom");
++    CHECK(strcmp(eq_profile_entry_name(12), "Rock") == 0,
+           "custom slot label comes from name=");
+ 
+     CHECK(eq_profile_select(1) == 0, "select built-in Rock");
+@@ -252,7 +252,7 @@ static void test_service(void)
+     CHECK(pub_enabled == 1, "enable is published");
+     eq_profile_save();
+ 
+-    CHECK(eq_profile_select(5) == 0, "select custom slot 1");
++    CHECK(eq_profile_select(12) == 0, "select custom slot 1");
+     CHECK(eq_profile_curve()->band[8].gain_tdb == 40,
+           "custom file loaded");
+ 
+@@ -262,16 +262,22 @@ static void test_service(void)
+     {
+         eq_curve_t before = *eq_profile_curve();
+ 
+-        CHECK(eq_profile_select(6) < 0, "broken slot is rejected");
++        CHECK(eq_profile_select(13) < 0, "broken slot is rejected");
+         CHECK(eq_profile_curve()->band[0].gain_tdb ==
+               before.band[0].gain_tdb, "rejection leaves the curve untouched");
+     }
+ 
+     /* A sixth file appears without recompiling. */
+     write_text(EQDIR "/custom6.cfg", flat_5);
+-    CHECK(eq_profile_scan() == 8, "custom6 appears in the picker");
+-    CHECK(strcmp(eq_profile_entry_name(7), "Five") == 0,
++    CHECK(eq_profile_scan() == 15, "custom6 appears in the picker");
++    CHECK(strcmp(eq_profile_entry_name(14), "Five") == 0,
+           "custom6 label parsed");
++
++    /* Neon Drive presets */
++    CHECK(strcmp(eq_profile_entry_name(5), "Bass Boost") == 0, "Bass Boost listed");
++    CHECK(strcmp(eq_profile_entry_name(7), "Vocal Boost") == 0, "Vocal Boost listed");
++    CHECK(eq_profile_select(5) == 0 && eq_profile_curve()->band[0].gain_tdb == 60,
++          "Bass Boost curve");
+ }
+ 
+ int main(void)
 diff --git a/firmware/services/tests/test_search_az.c b/firmware/services/tests/test_search_az.c
 new file mode 100644
-index 0000000..24d12f8
+index 0000000..15e7316
 --- /dev/null
 +++ b/firmware/services/tests/test_search_az.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,124 @@
 +/*
 + * test_search_az.c — Neon Drive: mq_search_init + A-Z helpers.
 + */
@@ -274,14 +863,181 @@ index 0000000..24d12f8
 +    mq_done();
 +    CHECK(mq_initial_index('A') == -1);         /* empty list */
 +
++    /* playlists: every accepted path form, file order kept, missing dropped */
++    (void)mkdir(".work/Internal/Playlists", 0777);
++    {
++        FILE *f = fopen(".work/Internal/Playlists/Night Mix.m3u8", "w");
++
++        fputs("#EXTM3U\r\n"
++              "#EXTINF:258,Kavinsky - Roadgame\r\n"
++              "../Music/Roadgame.flac\r\n"
++              "/Internal/Music/Nightcall.flac\n"
++              "Music\\Midnight City.flac\n"
++              "Internal/Music/Not Here.flac\n"
++              "  /internal/music/MID-AIR BLADE.FLAC\n"
++              "../Music/./sub/../Roadgame.flac", f);
++        fclose(f);
++        f = fopen(".work/Internal/Playlists/Gym.m3u", "w");
++        fputs("/Internal/Music/99 Lights.flac\n", f);
++        fclose(f);
++        f = fopen(".work/Internal/Playlists/notes.txt", "w");
++        fputs("x", f);
++        fclose(f);
++    }
++    CHECK(mq_playlists_init() == 0);
++    CHECK(mq_names_count() == 2);
++    CHECK(strcmp(mq_names_get(0), "Gym") == 0);
++    CHECK(strcmp(mq_names_get(1), "Night Mix") == 0);
++    CHECK(mq_playlist_init("Night Mix") == 0);
++    CHECK(mq_filter_count() == 5);              /* 6 lines, 1 missing */
++    CHECK(mq_filter_get(0, &r) == FS_OK && strcmp(r.title, "Roadgame") == 0);
++    CHECK(mq_filter_get(1, &r) == FS_OK && strcmp(r.title, "Nightcall") == 0);
++    CHECK(mq_filter_get(2, &r) == FS_OK && strcmp(r.title, "Midnight City") == 0);
++    CHECK(mq_filter_get(3, &r) == FS_OK && strcmp(r.title, "Mid-Air Blade") == 0);
++    CHECK(mq_filter_get(4, &r) == FS_OK && strcmp(r.title, "Roadgame") == 0);
++    CHECK(mq_playlist_init("Gym") == 0 && mq_filter_count() == 1);
++    CHECK(mq_playlist_init("Nope") != 0);
++    mq_done();
++
 +    printf("%d checks, %d failures\n", s_checks, s_failures);
 +    return s_failures != 0;
 +}
 diff --git a/firmware/startup/ap_ui.c b/firmware/startup/ap_ui.c
-index 4a8fc06..32b2505 100644
+index 0f19ed4..c344b09 100644
 --- a/firmware/startup/ap_ui.c
 +++ b/firmware/startup/ap_ui.c
-@@ -1473,6 +1473,7 @@ void ap_ui_loop(void)
+@@ -41,10 +41,12 @@
+ #include "drivers/bt_hw.h"
+ #include "player.h"
+ #include "player/ipc_b.h"
++#include "player/ipc_shared.h"   /* IPC_RING_BYTES (Neon Drive) */
+ #include "ui/ui.h"
+ #include "ui/screens/screens.h"
+ #include "ui/screens/theme_ui.h"
+ #include "ui/screens/skin_screen.h"
++#include "startup/neon_fx.h"   /* Neon Drive boot/off animations */
+ #include "player/bfs.h"     /* phase 3: A-side file service for Core B */
+ 
+ /* Debug-only System actions (DAC test + USB CDC console). Off by default:
+@@ -578,9 +580,13 @@ static void update_prompt(void)
+     power_off();
+ }
+ 
++static int s_fx_off;   /* Neon Drive: the off animation already blanked */
++
+ static void power_off(void)
+ {
+-    screen("Powering off");
++    if (!s_fx_off)
++        screen("Powering off");
++    s_fx_off = 0;
+     while (keys_power())
+         panel_io_delay_ms(1);
+     display_clear(0x0000);
+@@ -678,6 +684,7 @@ static void usb_session(void)
+     display_flush_rows(0, DISPLAY_H - 1);
+     r = usb_msc_run(luns, 2, usb_power_step, &rd, &wr);
+     fs_target_mount(0, "Internal", emmc_read, s_user);   /* host may have written */
++    media_db_forget();                    /* Neon Drive: re-verify after USB */
+     snprintf(s_usb, sizeof s_usb, "x%d r%uM w%uM", r, (unsigned)(rd >> 11), (unsigned)(wr >> 11));
+     /* Session forensics: how it ended and which SCSI opcode/LUN was last on
+      * the wire. When a host-side tool misbehaves (Nautilus freezing on
+@@ -700,6 +707,10 @@ static void usb_session(void)
+             resume_poll(ap_ms(), 1);  /* persist the last position first */
+             settings_screen_store();
+             (void)log_flush("power");
++            if (player_get_state() == PLAYER_PLAYING)
++                (void)player_pause();
++            neon_poweroff_anim(ap_ms);   /* Neon Drive: 3 s diagonal wipe */
++            s_fx_off = 1;
+             power_off();              /* may return on VBUS (park) */
+         }
+         while (keys_power())          /* don't leak the exit press */
+@@ -1139,6 +1150,11 @@ static void cdc_overlay_run(void)
+ }
+ #endif
+ 
++static const char *fw_text(void)
++{
++    return "Neon Drive 2";
++}
++
+ /* ---- System: the explicit diagnostic view (BRNOMT-72) -------------------- */
+ /* Everything that used to clutter the root menu (hardware probes, USB console,
+  * index maintenance) lives here. Same list mechanics as every other menu, but
+@@ -1152,13 +1168,16 @@ static const menu_item_t k_sys_items[] = {
+ #if AP_CDC_OVERLAY
+     { "CDC overlay",   NULL,       cdc_overlay_run },
+ #endif
+-    { "Rebuild index", NULL,       index_rebuild_run },
+-    { "Index",         index_text, NULL },
++    { "Rebuild library", NULL,     index_rebuild_run },
++    { "All settings",  NULL,       open_settings },      /* Neon Drive */
++    { "USB storage",   NULL,       usb_storage_entry },  /* Neon Drive */
++    { "Library",       index_text, NULL },
+     { "Keys",          keys_text,  NULL },
+     { "eMMC",          emmc_text,  NULL },
+     { "SD",            sd_text,    NULL },
+     { "USB",           usb_text,   NULL },
+     { "USB diag",      usbd_text,  NULL },
++    { "Firmware",      fw_text,    NULL },               /* Neon Drive */
+ };
+ #define SYS_ITEM_COUNT ((int)(sizeof k_sys_items / sizeof k_sys_items[0]))
+ 
+@@ -1583,6 +1602,36 @@ static void vol_nav_apply(input_event_t *ev)
+         ev->type = (ev->type == KEY_UP) ? KEY_DOWN : KEY_UP;
+ }
+ 
++/* Neon Drive: audio first. Core B decodes from a small A->B file ring that
++ * only this loop refills (bfs_poll); a long UI frame (a full animated skin
++ * redraw + flush) used to outlast it on hi-res FLAC and the music chopped.
++ * (1) The skin engine calls this pump between sections, so drawing never
++ * starves the decoder; (2) while playing, animation frames are spaced out
++ * and skipped outright when the PCM ring is below a third. */
++static void neon_audio_pump(void)
++{
++    bfs_poll();
++    if (player_get_state() == PLAYER_PLAYING)
++        (void)player_process();
++}
++
++static int neon_anim_ok(unsigned now, unsigned last, int refresh_ms)
++{
++    ipc_b_status_t st;
++    unsigned period = (unsigned)refresh_ms;
++
++    if (player_get_state() != PLAYER_PLAYING)
++        return (unsigned)(now - last) >= period;
++    if (period < 150u)
++        period = 150u;
++    if ((unsigned)(now - last) < period)
++        return 0;
++    if (ipc_b_poll_state(&st) == IPC_B_RUNNING &&
++        (uint32_t)(st.ring_wr - st.ring_rd) < IPC_RING_BYTES / 3u)
++        return 0;
++    return 1;
++}
++
+ void ap_ui_loop(void)
+ {
+     input_event_t ev;
+@@ -1591,6 +1640,7 @@ void ap_ui_loop(void)
+     player_init();       /* register wav/mp3/flac codecs (registry) */
+     player_set_resolver(media_resolve);   /* BRNOMT-90: list index -> path */
+     mq_set_pump(player_process);  /* keep audio fed during library scans */
++    theme_skin_set_pump(neon_audio_pump);   /* Neon Drive: ...and long frames */
+     ui_init();
+     /* After ui_init(): the hook invalidates the Now Playing rows. */
+     player_set_callback(player_state_changed, 0);
+@@ -1633,6 +1683,7 @@ void ap_ui_loop(void)
+     player_screen_set_volume(player_get_volume());
+     s_volume_seen = player_get_volume();
+     battery_poll();      /* BRNOMT-83: seed the gauge before the first draw */
++    neon_boot_anim(ap_ms);   /* Neon Drive: shutter + sign + loading bar */
+     /* Bluetooth: restore the user's choice + remembered devices. The module
+      * stays off unless the user enabled it. */
+     extras_init();
+@@ -1646,6 +1697,7 @@ void ap_ui_loop(void)
       * one that declares home=skin gets the declarative home inserted above it
       * (BACK still reaches Files/USB/System). */
      skin_home_set_actions(open_library, open_player, open_settings);
@@ -289,8 +1045,315 @@ index 4a8fc06..32b2505 100644
      settings_screen_set_theme_applied(home_stack_sync);
      home_stack_sync();
      /* BRNOMT-87: the resume restore runs inside the loop, AFTER the first
+@@ -1821,6 +1873,10 @@ void ap_ui_loop(void)
+             resume_poll(now, 1);       /* persist the last position first */
+             settings_screen_store();
+             (void)log_flush("power");
++            if (player_get_state() == PLAYER_PLAYING)
++                (void)player_pause();
++            neon_poweroff_anim(ap_ms);   /* Neon Drive: 3 s diagonal wipe */
++            s_fx_off = 1;
+             power_off();
+         } else if (pev == POWER_EV_SHORT) {
+             s_idle_ms = now;
+@@ -1896,8 +1952,7 @@ void ap_ui_loop(void)
+             if (theme_layout()->home == THEME_HOME_SKIN &&
+                 ui_top_screen() == &skin_home_screen &&
+                 theme_skin_animated() &&
+-                (unsigned)(now - s_face_ms) >=
+-                    (unsigned)theme_skin_refresh_ms()) {
++                neon_anim_ok(now, s_face_ms, theme_skin_refresh_ms())) {
+                 s_face_ms = now;
+                 if (!skin_home_animate()) {
+                     int h = theme_skin_refresh_h();
+@@ -1914,8 +1969,7 @@ void ap_ui_loop(void)
+              * Now Playing/Library/Settings/Browser costs nothing per pass. */
+             if (theme_ui_active() && ui_top_screen() != &skin_home_screen &&
+                 theme_skin_animated() &&
+-                (unsigned)(now - s_theme_ms) >=
+-                    (unsigned)theme_skin_refresh_ms()) {
++                neon_anim_ok(now, s_theme_ms, theme_skin_refresh_ms())) {
+                 s_theme_ms = now;
+                 /* Now Playing animates its mini cassette/progress: same
+                  * static/dynamic split (no art re-stream, small flush). */
+diff --git a/firmware/startup/neon_fx.c b/firmware/startup/neon_fx.c
+new file mode 100644
+index 0000000..8a64a49
+--- /dev/null
++++ b/firmware/startup/neon_fx.c
+@@ -0,0 +1,248 @@
++/*
++ * neon_fx.c — Neon Drive boot and power-off animations.
++ *
++ * Boot (~1.9 s): the theme's alley shop. The roll-up shutter lifts (shutter
++ * rows slide up, the lit shop is revealed from the bottom), the neon sign
++ * flickers on ("電源オン", pre-rendered), and a segmented neon bar fills.
++ * Pictures are raw RGB565 files in <theme>/img/ streamed through the art
++ * pack's sector buffer: no RAM, and no files means no animation (plain boot).
++ *
++ * Power-off (3 s): a "virus" wipe. A corrupted, glitching front sweeps
++ * diagonally from the top-right corner to the bottom-left; behind it the
++ * screen is dead black. Then the caller powers down.
++ *
++ * Everything is clock-driven (frames are dropped, never slowed down) and uses
++ * only stack/static ints.
++ */
++#include <stdio.h>
++#include <string.h>
++
++#include "neon_fx.h"
++#include "../drivers/display.h"
++#include "../services/art_pack.h"
++#include "../theme/theme_runtime.h"
++#include "../services/rechord_files.h"
++
++void ui_text_scaled(int x, int y, const char *s, int scale, uint16_t fg);
++
++/* geometry shared with art/render_boot.py */
++#define DOOR_X 104
++#define DOOR_Y 74
++#define DOOR_W 112
++#define DOOR_H 70
++#define SIGN_X 96
++#define SIGN_Y 26
++#define SIGN_W 128
++#define SIGN_H 34
++
++#define C565(r, g, b) ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3)))
++
++static char s_p_shut[112], s_p_open[112], s_p_sign[112];
++
++static int img_paths(void)
++{
++    const char *id = theme_pkg_active_id();
++
++    if (id == 0 || id[0] == '\0')
++        return -1;
++    snprintf(s_p_shut, sizeof s_p_shut, RECHORD_THEMES_DIR "/%s/img/boot_shut.565", id);
++    snprintf(s_p_open, sizeof s_p_open, RECHORD_THEMES_DIR "/%s/img/boot_open.565", id);
++    snprintf(s_p_sign, sizeof s_p_sign, RECHORD_THEMES_DIR "/%s/img/boot_sign.565", id);
++    return 0;
++}
++
++/* segmented neon loading bar along the street */
++static void boot_bar(int pct)
++{
++    const int x0 = 60, y0 = 154, segs = 25, sw = 7;
++    char buf[16];
++    int i, lit = pct * segs / 100;
++
++    display_fill_rect(x0 - 6, y0 - 4, x0 + segs * (sw + 1) + 44, y0 + 11, C565(8, 6, 18));
++    display_fill_rect(x0 - 3, y0 - 2, x0 + segs * (sw + 1) + 1, y0 - 2, C565(63, 240, 224));
++    display_fill_rect(x0 - 3, y0 + 9, x0 + segs * (sw + 1) + 1, y0 + 9, C565(63, 240, 224));
++    for (i = 0; i < segs; i++) {
++        int x = x0 + i * (sw + 1);
++        /* pink -> cyan along the bar */
++        uint16_t c = C565(255 - i * 8, 63 + i * 7, 191 + i);
++
++        display_fill_rect(x, y0, x + sw - 1, y0 + 6, i < lit ? c : C565(30, 22, 48));
++    }
++    snprintf(buf, sizeof buf, "%3d%%", pct);
++    display_draw_text(x0 + segs * (sw + 1) + 6, y0, buf, C565(255, 255, 255), C565(8, 6, 18));
++    display_flush_rect(x0 - 6, y0 - 4, x0 + segs * (sw + 1) + 44, y0 + 11);
++}
++
++static int s_b_rv, s_b_sign, s_b_pct;
++
++int neon_boot_begin(void)
++{
++    if (img_paths() != 0)
++        return -1;
++    if (art_pack_blit_file(s_p_shut, 0, 0, DISPLAY_W, DISPLAY_H, 0, 0, DISPLAY_W, 0) != 0)
++        return -1;                                /* no boot art: plain boot */
++    display_flush_rows(0, DISPLAY_H - 1);
++    boot_bar(0);
++    s_b_rv = -1;
++    s_b_sign = -1;
++    s_b_pct = -1;
++    return 0;
++}
++
++/* one frame at t ms since begin; returns 1 when finished */
++int neon_boot_frame(unsigned t)
++{
++    int rv, sign, pct;
++
++    if (t > 1950u) {
++        boot_bar(100);
++        return 1;
++    }
++    /* shutter: 200..1100 ms, ease-out */
++    if (t < 200u)
++        rv = 0;
++    else if (t >= 1100u)
++        rv = DOOR_H;
++    else {
++        int p = (int)(t - 200u) * 1000 / 900;          /* 0..1000 */
++        int e = 1000 - (1000 - p) * (1000 - p) / 1000;
++
++        rv = e * DOOR_H / 1000;
++    }
++    if (rv != s_b_rv) {
++        int split = DOOR_Y + DOOR_H - rv;              /* shutter bottom edge */
++
++        if (DOOR_H - rv > 0)                           /* slats slide up */
++            art_pack_blit_file(s_p_shut, DOOR_X, DOOR_Y, DOOR_W, DOOR_H - rv,
++                               DOOR_X, DOOR_Y + rv, DISPLAY_W, 0);
++        if (rv > 0)                                    /* the lit shop */
++            art_pack_blit_file(s_p_open, DOOR_X, split, DOOR_W, rv,
++                               DOOR_X, split, DISPLAY_W, 0);
++        if (rv < DOOR_H)                               /* shutter lip + shadow */
++            display_fill_rect(DOOR_X, split - 2, DOOR_X + DOOR_W - 1, split - 1,
++                              C565(20, 22, 36));
++        display_flush_rect(DOOR_X, DOOR_Y, DOOR_X + DOOR_W - 1, DOOR_Y + DOOR_H - 1);
++        s_b_rv = rv;
++    }
++    /* sign: dead until 1150 ms, then a neon stutter, then on */
++    sign = (t >= 1150u && t < 1210u) || (t >= 1290u && t < 1320u) ||
++           (t >= 1380u && t < 1400u) || t >= 1460u;
++    if (sign != s_b_sign) {
++        if (sign)
++            art_pack_blit_file(s_p_sign, SIGN_X, SIGN_Y, SIGN_W, SIGN_H, 0, 0, SIGN_W, 0);
++        else
++            art_pack_blit_file(s_p_shut, SIGN_X, SIGN_Y, SIGN_W, SIGN_H,
++                               SIGN_X, SIGN_Y, DISPLAY_W, 0);
++        display_flush_rect(SIGN_X, SIGN_Y, SIGN_X + SIGN_W - 1, SIGN_Y + SIGN_H - 1);
++        s_b_sign = sign;
++    }
++    pct = t >= 1800u ? 100 : (int)(t * 100u / 1800u);
++    if (pct / 4 != s_b_pct / 4) {
++        boot_bar(pct);
++        s_b_pct = pct;
++    }
++    return 0;
++}
++
++void neon_boot_anim(unsigned (*now_ms)(void))
++{
++    unsigned t0;
++
++    if (now_ms == 0 || neon_boot_begin() != 0)
++        return;
++    t0 = now_ms();
++    while (!neon_boot_frame(now_ms() - t0))
++        ;
++}
++
++/* ---- power-off: diagonal virus wipe ------------------------------------ */
++
++static unsigned s_rnd = 0x2077u;
++
++static unsigned rnd(void)
++{
++    s_rnd = s_rnd * 1103515245u + 12345u;
++    return s_rnd >> 16;
++}
++
++#define CELL 8
++#define COLS (DISPLAY_W / CELL)                    /* 40 */
++#define ROWS ((DISPLAY_H + CELL - 1) / CELL)       /* 22 */
++#define DIAG (COLS + ROWS)                         /* 62 diagonals */
++#define BAND 5                                     /* glitch front width */
++
++static void glitch_cell(int cx, int cy)
++{
++    static const uint16_t pal[] = {
++        C565(255, 63, 191), C565(63, 240, 224), C565(182, 255, 90),
++        C565(255, 59, 79), C565(240, 240, 255), C565(0, 0, 0), C565(40, 0, 60) };
++    int x = cx * CELL, y = cy * CELL, q;
++
++    for (q = 0; q < 4; q++) {                       /* 4x4 sub-blocks */
++        int sx = x + (q & 1) * 4, sy = y + (q >> 1) * 4;
++        unsigned r = rnd();
++
++        display_fill_rect(sx, sy, sx + 3, sy + 3, pal[r % 7u]);
++    }
++    if ((rnd() & 7u) == 0u)                          /* horizontal tear */
++        display_fill_rect(x - CELL * (int)(rnd() % 6u), y + (int)(rnd() % 8u),
++                          x + CELL, y + (int)(rnd() % 8u), pal[rnd() % 4u]);
++}
++
++static int s_dead;                                  /* diagonals already black */
++
++void neon_off_begin(void)
++{
++    s_dead = 0;
++}
++
++int neon_off_frame(unsigned t)
++{
++    int front, k, cx;
++
++    if (t >= 3000u) {
++        display_fill_rect(0, 0, DISPLAY_W - 1, DISPLAY_H - 1, 0x0000);
++        display_flush_rows(0, DISPLAY_H - 1);
++        return 1;
++    }
++    /* the front runs through all diagonals plus the band, ease-in */
++    front = (int)((unsigned long)t * t / 3000u * (DIAG + BAND) / 3000u);
++    /* everything behind the band dies */
++    for (; s_dead < front - BAND && s_dead < DIAG; s_dead++)
++        for (cx = 0; cx < COLS; cx++) {
++            int cy = s_dead - (COLS - 1 - cx);
++
++            if (cy >= 0 && cy < ROWS)
++                display_fill_rect(cx * CELL, cy * CELL, cx * CELL + CELL - 1,
++                                  cy * CELL + CELL - 1, 0x0000);
++        }
++    /* the band boils */
++    for (k = front - BAND; k <= front; k++) {
++        if (k < s_dead || k >= DIAG)
++            continue;
++        for (cx = 0; cx < COLS; cx++) {
++            int cy = k - (COLS - 1 - cx);
++
++            if (cy >= 0 && cy < ROWS && (rnd() & 3u) != 0u)
++                glitch_cell(cx, cy);
++        }
++    }
++    /* a last gasp across the middle */
++    if (t > 900u && t < 1500u && (rnd() & 1u))
++        ui_text_scaled(56 + (int)(rnd() % 5u) - 2, 74, "SIGNAL LOST", 2,
++                       (rnd() & 1u) ? C565(255, 59, 79) : C565(63, 240, 224));
++    display_flush_rows(0, DISPLAY_H - 1);
++    return 0;
++}
++
++void neon_poweroff_anim(unsigned (*now_ms)(void))
++{
++    unsigned t0;
++
++    if (now_ms == 0)
++        return;
++    neon_off_begin();
++    t0 = now_ms();
++    while (!neon_off_frame(now_ms() - t0))
++        ;
++}
+diff --git a/firmware/startup/neon_fx.h b/firmware/startup/neon_fx.h
+new file mode 100644
+index 0000000..114cc05
+--- /dev/null
++++ b/firmware/startup/neon_fx.h
+@@ -0,0 +1,16 @@
++/* neon_fx.h — Neon Drive boot / power-off animations (see neon_fx.c). */
++#ifndef NEON_FX_H
++#define NEON_FX_H
++
++/* Streams <theme>/img/boot_*.565; returns at once if they are missing. */
++void neon_boot_anim(unsigned (*now_ms)(void));
++/* 3 s diagonal glitch wipe, top-right -> bottom-left, ends on black. */
++void neon_poweroff_anim(unsigned (*now_ms)(void));
++
++/* Frame-stepped forms (the simulator drives these from its tick). */
++int neon_boot_begin(void);          /* -1: no boot art */
++int neon_boot_frame(unsigned t);    /* t ms since begin; 1 = done */
++void neon_off_begin(void);
++int neon_off_frame(unsigned t);
++
++#endif
 diff --git a/firmware/theme/tests/run_tests.sh b/firmware/theme/tests/run_tests.sh
-index c28eef9..c8b0da4 100644
+index c28eef9..2d511fe 100644
 --- a/firmware/theme/tests/run_tests.sh
 +++ b/firmware/theme/tests/run_tests.sh
 @@ -18,7 +18,8 @@ $CC $CFLAGS -I.. -o .work/test_theme_pkg \
@@ -298,24 +1361,35 @@ index c28eef9..c8b0da4 100644
  $CC $CFLAGS -I.. -o .work/test_theme_runtime \
      test_theme_runtime.c ../theme.c ../themes_builtin.c ../theme_file.c \
 -    ../theme_pkg.c ../theme_runtime.c ../theme_assets.c ../theme_skin.c
-+    ../theme_pkg.c ../theme_runtime.c ../theme_assets.c ../theme_skin.c \
++    ../theme_pkg.c ../theme_runtime.c ../theme_assets.c ../theme_skin.c stub_art.c \
 +    ../../drivers/font.c ../../drivers/font8x8.c
  .work/test_theme_runtime
  
  echo "ALL THEME TESTS PASSED"
+diff --git a/firmware/theme/tests/stub_art.c b/firmware/theme/tests/stub_art.c
+new file mode 100644
+index 0000000..be2c807
+--- /dev/null
++++ b/firmware/theme/tests/stub_art.c
+@@ -0,0 +1,4 @@
++/* Neon Drive: the image meter's streaming backend is not part of these tests */
++int art_pack_blit_file(const char *path, int x, int y, int w, int h,
++                       int sx, int sy, int sw, void (*pump)(void))
++{ (void)path; (void)x; (void)y; (void)w; (void)h; (void)sx; (void)sy; (void)sw; (void)pump; return -1; }
 diff --git a/firmware/theme/theme_skin.c b/firmware/theme/theme_skin.c
-index 7098f23..2f5be29 100644
+index eb0eca7..1bba54d 100644
 --- a/firmware/theme/theme_skin.c
 +++ b/firmware/theme/theme_skin.c
-@@ -15,6 +15,7 @@
+@@ -15,6 +15,8 @@
  #include "theme_pkg.h"
  #include "theme_assets.h"
  #include "../drivers/display.h"
 +#include "../drivers/font.h"
++#include "../services/art_pack.h"
  
  #ifdef RECHORD_AP_BUILD
  #include "../services/fs.h"
-@@ -24,14 +25,14 @@
+@@ -24,14 +26,14 @@
  /* Parsed, not stored: the engine scans the text per frame, so raising this
   * costs no RAM (the cassette theme's home needs 49). Keep it just above the
   * largest shipped skin. */
@@ -332,7 +1406,33 @@ index 7098f23..2f5be29 100644
  #define SKIN_FONT_W     8
  #define SKIN_VARS       20
  #define SKIN_VAR_EXPR_MAX 112
-@@ -981,6 +982,12 @@ static int action_from_word(const char *s)
+@@ -95,7 +97,9 @@ static int s_refresh_h = -1;
+  * untouched from the last full draw. */
+ static int s_dyn_only;
+ static int s_dyn_n;
+-static int s_dyn_rect[3][4];
++static int s_dyn_rect[THEME_SKIN_DYN_MAX][4];
++static char s_dir[96];       /* Neon Drive: <root>/<id> for image files */
++static void (*s_render_pump)(void);
+ static int s_animated;
+ 
+ /* ---------------------------------------------------------------- values */
+@@ -243,6 +247,14 @@ static skin_val_t variable(const char *name)
+         return v_int(c != 0 && c->st != 0 ? c->st->paused : 0);
+     if (strcmp(name, "stopped") == 0)
+         return v_int(c != 0 && c->st != 0 ? c->st->stopped : 0);
++    /* Neon Drive: volume as 0..80 steps (player range -60..+20 dB) and the
++     * average bitrate of the current file */
++    if (strcmp(name, "vol_lv") == 0) {
++        int lv = (c != 0 && c->st != 0 ? c->st->volume_db : 0) + 60;
++        return v_int(lv < 0 ? 0 : (lv > 80 ? 80 : lv));
++    }
++    if (strcmp(name, "kbps") == 0)
++        return v_int(c != 0 && c->st != 0 ? c->st->kbps : 0);
+     if (strcmp(name, "volume") == 0)
+         return v_int(c != 0 && c->st != 0 ? c->st->volume_db : 0);
+     if (strcmp(name, "battery") == 0)
+@@ -985,6 +997,12 @@ static int action_from_word(const char *s)
          return THEME_SKIN_PLAYER;
      if (key_eq(s, "settings"))
          return THEME_SKIN_SETTINGS;
@@ -345,7 +1445,31 @@ index 7098f23..2f5be29 100644
      return THEME_SKIN_NONE;
  }
  
-@@ -1453,6 +1460,53 @@ static const char *row_value(int idx, char *buf, int cap)
+@@ -1055,6 +1073,7 @@ int theme_skin_load(const char *root, const char *id, const char *path)
+         return -1;
+     if (read_text(full) != 0)
+         return -1;
++    snprintf(s_dir, sizeof s_dir, "%s/%s", root, id);
+ 
+     s_list.axis = theme_layout()->home_nav;
+     s_list.x = -1;
+@@ -1093,6 +1112,15 @@ int theme_skin_load(const char *root, const char *id, const char *path)
+             v = prop(&sec, "dyn3");
+             if (v != 0 && parse_rect(v, s_dyn_rect[2]) == 0)
+                 s_dyn_n = 3;
++            v = prop(&sec, "dyn4");
++            if (v != 0 && parse_rect(v, s_dyn_rect[3]) == 0)
++                s_dyn_n = 4;
++            v = prop(&sec, "dyn5");
++            if (v != 0 && parse_rect(v, s_dyn_rect[4]) == 0)
++                s_dyn_n = 5;
++            v = prop(&sec, "dyn6");
++            if (v != 0 && parse_rect(v, s_dyn_rect[5]) == 0)
++                s_dyn_n = 6;
+         } else if (key_eq(sec.name, "vars") ||
+                    key_eq(sec.name, "vars2") ||
+                    key_eq(sec.name, "vars3")) {
+@@ -1457,6 +1485,53 @@ static const char *row_value(int idx, char *buf, int cap)
      return 0;
  }
  
@@ -399,7 +1523,7 @@ index 7098f23..2f5be29 100644
  static void draw_list(int sel, int top)
  {
      const theme_layout_t *l = theme_layout();
-@@ -1484,26 +1538,36 @@ static void draw_list(int sel, int top)
+@@ -1488,26 +1563,36 @@ static void draw_list(int sel, int top)
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
              const char *value = row_value(idx, vbuf, (int)sizeof vbuf);
  
@@ -450,7 +1574,7 @@ index 7098f23..2f5be29 100644
              }
          }
          return;
-@@ -1535,14 +1599,20 @@ static void draw_list(int sel, int top)
+@@ -1539,14 +1624,20 @@ static void draw_list(int sel, int top)
              char lbuf[64];
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
  
@@ -476,11 +1600,39 @@ index 7098f23..2f5be29 100644
              }
              x += widths[i] + 16;
          }
-@@ -1589,6 +1659,109 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1593,6 +1684,145 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
          return;
      }
  
 +    /* ---- Neon Drive meters ------------------------------------------ */
++    if (key_eq(type, "image")) {
++        /* raw RGB565 picture from the theme folder, streamed (no RAM):
++         * file x y w h [sx sy sw] — a window of a wider source image */
++        char name[SKIN_VAL_MAX], path[160];
++
++        if (eval_string(prop(sec, "file"), ctx, name, sizeof name) != 0 ||
++            name[0] == '\0')
++            return;
++        {
++            const char *q;
++
++            for (q = name; q[0] != '\0'; q++)
++                if (q[0] == '.' && q[1] == '.')
++                    return;           /* stay inside the theme folder */
++        }
++        snprintf(path, sizeof path, "%s/%s", s_dir, name);
++        x = eval_int(prop(sec, "x"), ctx, 0);
++        y = eval_int(prop(sec, "y"), ctx, 0);
++        w = eval_int(prop(sec, "w"), ctx, 0);
++        h = eval_int(prop(sec, "h"), ctx, 0);
++        (void)art_pack_blit_file(path, x, y, w, h,
++                                 eval_int(prop(sec, "sx"), ctx, 0),
++                                 eval_int(prop(sec, "sy"), ctx, 0),
++                                 eval_int(prop(sec, "sw"), ctx, w),
++                                 s_render_pump);
++        return;
++    }
++
 +    if (key_eq(type, "quad")) {
 +        /* slanted tag: parallelogram, top edge shifted right by `skew`;
 +         * `color` fills (or none), `line` strokes `lw` px (optional) */
@@ -550,8 +1702,8 @@ index 7098f23..2f5be29 100644
 +         * cell (sx by sy) holds a dw x dh dot when hash(cell, seed) % 100 <
 +         * density; with blink=N ms, about 1 in 5 dots is off at any time
 +         * and the pattern shifts every N ms (twinkle). */
-+        int sx, sy, dw, dh, dens, seed, blink, gx, gy;
-+        uint16_t c;
++        int sx, sy, dw, dh, dens, seed, blink, gx, gy, has_off;
++        uint16_t c, oc;
 +
 +        x = eval_int(prop(sec, "x"), ctx, 0);
 +        y = eval_int(prop(sec, "y"), ctx, 0);
@@ -565,6 +1717,8 @@ index 7098f23..2f5be29 100644
 +        seed = eval_int(prop(sec, "seed"), ctx, 1);
 +        blink = eval_int(prop(sec, "blink"), ctx, 0);
 +        c = color_of(prop(sec, "color"), ctx, theme_get()->text);
++        has_off = prop(sec, "off") != 0;
++        oc = color_of(prop(sec, "off"), ctx, theme_get()->background);
 +        if (sx <= 0 || sy <= 0)
 +            return;
 +        for (gy = 0; gy * sy < h; gy++)
@@ -575,10 +1729,16 @@ index 7098f23..2f5be29 100644
 +                hv ^= hv >> 13; hv *= 0x5bd1e995u; hv ^= hv >> 15;
 +                if ((int)(hv % 100u) >= dens)
 +                    continue;
-+                if (blink > 0 && (((hv >> 8) + ctx->now / (unsigned)blink) % 5u) == 0u)
-+                    continue;
-+                display_fill_rect(x + gx * sx, y + gy * sy,
-+                                  x + gx * sx + dw - 1, y + gy * sy + dh - 1, c);
++                {
++                    int off = blink > 0 &&
++                              (((hv >> 8) + ctx->now / (unsigned)blink) % 5u) == 0u;
++
++                    if (off && !has_off)
++                        continue;
++                    display_fill_rect(x + gx * sx, y + gy * sy,
++                                      x + gx * sx + dw - 1, y + gy * sy + dh - 1,
++                                      off ? oc : c);
++                }
 +            }
 +        return;
 +    }
@@ -586,7 +1746,7 @@ index 7098f23..2f5be29 100644
      if (key_eq(type, "fill")) {
          x = eval_int(prop(sec, "x"), ctx, 0);
          y = eval_int(prop(sec, "y"), ctx, 0);
-@@ -1651,9 +1824,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1655,9 +1885,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
          ctx->ah = ah;
          x = eval_int(prop(sec, "x"), ctx, 0);
          y = eval_int(prop(sec, "y"), ctx, 0);
@@ -631,7 +1791,7 @@ index 7098f23..2f5be29 100644
          return;
      }
  
-@@ -1681,12 +1886,19 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1685,12 +1947,19 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
              /* Optional right alignment: `x` is the right edge. The mockups
               * need it for counters, volume and i/N (the engine has no text
               * measuring helper for themes). */
@@ -655,7 +1815,7 @@ index 7098f23..2f5be29 100644
          return;
      }
  
-@@ -1719,6 +1931,18 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1723,11 +1992,28 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
      }
  
      if (key_eq(type, "list")) {
@@ -674,8 +1834,27 @@ index 7098f23..2f5be29 100644
          draw_list(sel, ctx->top);
          return;
      }
+ }
+ 
++void theme_skin_set_pump(void (*fn)(void))
++{
++    s_render_pump = fn;
++}
++
+ void theme_skin_render(unsigned now, unsigned idle, int sel, int top,
+                        const theme_skin_state_t *st)
+ {
+@@ -1756,6 +2042,8 @@ void theme_skin_render(unsigned now, unsigned idle, int sel, int top,
+                 continue;
+         }
+         render_section(&sec, &ctx, sel);
++        if (s_render_pump != 0 && (sections & 7) == 0)
++            s_render_pump();
+     }
+ }
+ 
 diff --git a/firmware/theme/theme_skin.h b/firmware/theme/theme_skin.h
-index 7fb56fd..f5cd099 100644
+index 1d84910..3169514 100644
 --- a/firmware/theme/theme_skin.h
 +++ b/firmware/theme/theme_skin.h
 @@ -32,7 +32,7 @@
@@ -698,6 +1877,30 @@ index 7fb56fd..f5cd099 100644
  };
  
  /* Read-only state exposed to skin expressions. The UI adapter fills it; the
+@@ -77,6 +79,7 @@ typedef struct theme_skin_state {
+     int  playlist_pos;            /* 1-based, 0 when no list */
+     int  playlist_count;
+     int  shuffle;
++    int  kbps;                    /* Neon Drive: average bitrate, 0 unknown */
+     int  repeat;                  /* PLAYLIST_REPEAT_* */
+     int  bt;                      /* 0 off, 1 on, 2 connected */
+     int  bt_stream;               /* 1 while A2DP is streaming */
+@@ -110,10 +113,15 @@ typedef struct theme_skin_art {
+ 
+ void theme_skin_set_art(const theme_skin_art_t *art);
+ 
++/* Neon Drive: called every few sections while rendering (feeds the audio
++ * pipeline during long frames). NULL = none. */
++void theme_skin_set_pump(void (*fn)(void));
++
+ /* Static/dynamic split: while `on`, render() draws only the sections carrying
+  * `dyn=1`. The package declares up to three rects with
+  * `[skin] dyn=x0,y0,x1,y1` / `dyn2=...` / `dyn3=...`; flush exactly those. */
+ void theme_skin_set_dynamic_only(int on);
++#define THEME_SKIN_DYN_MAX 6   /* Neon Drive: was 3 (dyn..dyn6) */
+ int  theme_skin_dyn_rect(int idx, int *x0, int *y0, int *x1, int *y1);
+ 
+ /* Navigation results for a compiled screen using the skin's prev/next map.
 diff --git a/firmware/ui/screens/az_screen.c b/firmware/ui/screens/az_screen.c
 new file mode 100644
 index 0000000..a65556f
@@ -846,11 +2049,205 @@ index 0000000..a65556f
 +    az_handle_event,
 +    0,
 +};
+diff --git a/firmware/ui/screens/eq_screen.c b/firmware/ui/screens/eq_screen.c
+index d83a3a3..3b925b5 100644
+--- a/firmware/ui/screens/eq_screen.c
++++ b/firmware/ui/screens/eq_screen.c
+@@ -2,7 +2,7 @@
+  * eq_screen.c — Equalizer settings (BRNOMT-76).
+  *
+  *   Enabled   on/off (the effect is bypassed on Core B)
+- *   Profile   opens the picker (5 built-ins + the custom slots on disk)
++ *   Profile   opens the picker (the built-ins + the custom slots on disk)
+  *   Band N    SELECT enters edit mode; UP/DOWN move the band by 0.5 dB
+  *             (the normal hold-to-repeat ladder gives fast sweeps);
+  *             SELECT or BACK leaves edit mode.
+@@ -11,6 +11,7 @@
+  * PCM block. Edits reach the DAC immediately; the file is persisted on
+  * BACK / profile selection.
+  */
++#include <stdio.h>
+ #include <string.h>
+ 
+ #include "screens.h"
+@@ -32,11 +33,6 @@ static const char *eq_value_enabled(void)
+     return eq_profile_enabled() ? "On" : "Off";
+ }
+ 
+-static const char *eq_value_profile(void)
+-{
+-    return eq_profile_name();
+-}
+-
+ static const char *band_value(int band)
+ {
+     const eq_curve_t *c = eq_profile_curve();
+@@ -48,28 +44,6 @@ static const char *band_value(int band)
+     return s_value_buf;
+ }
+ 
+-static const char *eq_value_band_0(void) { return band_value(0); }
+-static const char *eq_value_band_1(void) { return band_value(1); }
+-static const char *eq_value_band_2(void) { return band_value(2); }
+-static const char *eq_value_band_3(void) { return band_value(3); }
+-static const char *eq_value_band_4(void) { return band_value(4); }
+-static const char *eq_value_band_5(void) { return band_value(5); }
+-static const char *eq_value_band_6(void) { return band_value(6); }
+-static const char *eq_value_band_7(void) { return band_value(7); }
+-static const char *eq_value_band_8(void) { return band_value(8); }
+-static const char *eq_value_band_9(void) { return band_value(9); }
+-
+-static const char *(*const s_band_value_fn[EQ_BANDS_MAX])(void) = {
+-    eq_value_band_0, eq_value_band_1, eq_value_band_2, eq_value_band_3,
+-    eq_value_band_4, eq_value_band_5, eq_value_band_6, eq_value_band_7,
+-    eq_value_band_8, eq_value_band_9,
+-};
+-
+-static const char *eq_status(void)
+-{
+-    return s_editing ? "EDIT" : 0;
+-}
+-
+ static void eq_on_enter(void)
+ {
+     if (!eq_profile_ready())
+@@ -87,38 +61,78 @@ static void eq_on_exit(void)
+     s_reenter_reset = 1;
+ }
+ 
++/* Neon Drive: a graphic EQ. Two buttons on top (Enabled, Profile), ten
++ * vertical sliders (+-12 dB, 0 dB line), the selected band's exact value
++ * underneath. Same rows and keys as before: Enabled, Profile, Band 0..9. */
++static void eq_button(int x, int w, const char *text, int on)
++{
++    display_fill_rect(x, 19, x + w - 1, 34, on ? THEME_COLOR_ACCENT : THEME_COLOR_DIM);
++    display_fill_rect(x + 1, 20, x + w - 2, 33,
++                      on ? THEME_COLOR_ACCENT : THEME_COLOR_BG);
++    display_draw_text(x + 6, 23, text, on ? THEME_COLOR_BG : THEME_COLOR_FG,
++                      on ? THEME_COLOR_ACCENT : THEME_COLOR_BG);
++}
++
+ static void eq_draw(void)
+ {
+-    menu_item_t items[EQ_BANDS_MAX + 2];
+-    menu_model_t model;
++    static const char *const k_short[EQ_BANDS_MAX] = {
++        "31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K" };
+     const eq_curve_t *c = eq_profile_curve();
+-    char band_label[EQ_BANDS_MAX][10];
+-    int i, n = 0;
+-
+-    items[n].label = "Enabled";
+-    items[n].value_text = eq_value_enabled;
+-    items[n].on_select = 0;
+-    n++;
+-    items[n].label = "Profile";
+-    items[n].value_text = eq_value_profile;
+-    items[n].on_select = 0;
+-    n++;
+-
++    int cur = s_view.cursor, i;
++    char buf[40], fbuf[12];
++
++    display_clear(THEME_COLOR_BG);
++    display_fill_rect(0, 3, 2, 12, THEME_COLOR_WARN);
++    display_draw_text(8, 4, "Equalizer", THEME_COLOR_ACCENT, THEME_COLOR_BG);
++    if (eq_profile_is_dirty())
++        display_draw_text(DISPLAY_W - 6 - 6 * 8, 4, "edited", THEME_COLOR_DIM,
++                          THEME_COLOR_BG);
++
++    snprintf(buf, sizeof buf, "Enabled: %s", eq_value_enabled());
++    eq_button(6, 112, buf, cur == EQ_ROW_ENABLED);
++    snprintf(buf, sizeof buf, "Profile: %.12s >", eq_profile_name());
++    eq_button(124, DISPLAY_W - 130, buf, cur == EQ_ROW_PROFILE);
++
++    /* 0 dB line and the sliders */
++    display_fill_rect(6, 86, DISPLAY_W - 7, 86, THEME_COLOR_SELECT_BG);
+     for (i = 0; i < (int)c->count && i < EQ_BANDS_MAX; i++) {
+-        if (eq_profile_format_freq(c->band[i].freq_hz, band_label[i],
+-                                   (unsigned)sizeof band_label[i]) < 0)
+-            band_label[i][0] = '\0';
+-        items[n].label = band_label[i];
+-        items[n].value_text = s_band_value_fn[i];
+-        items[n].on_select = 0;
+-        n++;
++        int cx = 21 + i * 31;
++        int g = c->band[i].gain_tdb;
++        int y = 86 - g * 38 / 120;
++        int sel = (cur == EQ_ROW_BAND0 + i);
++        uint16_t bar = eq_profile_enabled() ? THEME_COLOR_ACCENT : THEME_COLOR_DIM;
++
++        if (sel)
++            display_fill_rect(cx - 14, 40, cx + 14, 145, THEME_COLOR_SELECT_BG);
++        display_fill_rect(cx, 46, cx, 126, THEME_COLOR_DIM);
++        if (y < 86)
++            display_fill_rect(cx - 3, y, cx + 3, 85, bar);
++        else if (y > 86)
++            display_fill_rect(cx - 3, 87, cx + 3, y, bar);
++        display_fill_rect(cx - 7, y - 2, cx + 7, y + 2,
++                          sel && s_editing ? THEME_COLOR_WARN : THEME_COLOR_FG);
++        display_draw_text(cx - (int)strlen(k_short[i]) * 4, 135, k_short[i],
++                          sel ? THEME_COLOR_FG : THEME_COLOR_DIM,
++                          sel ? THEME_COLOR_SELECT_BG : THEME_COLOR_BG);
+     }
+ 
+-    model.title = "Equalizer";
+-    model.items = items;
+-    model.item_count = n;
+-    model.status_text = eq_status;
+-    menu_draw(&model, &s_view);
++    /* detail line */
++    display_fill_rect(0, 150, DISPLAY_W - 1, 150, THEME_COLOR_SELECT_BG);
++    if (cur >= EQ_ROW_BAND0 && cur - EQ_ROW_BAND0 < (int)c->count) {
++        int b = cur - EQ_ROW_BAND0;
++
++        if (eq_profile_format_freq(c->band[b].freq_hz, fbuf, sizeof fbuf) < 0)
++            fbuf[0] = '\0';
++        snprintf(buf, sizeof buf, "%s  %s dB", fbuf, band_value(b));
++        display_draw_text(8, 157, buf, THEME_COLOR_FG, THEME_COLOR_BG);
++        display_draw_text(DISPLAY_W - 8 - (s_editing ? 4 : 6) * 8, 157,
++                          s_editing ? "EDIT" : "ADJUST",
++                          s_editing ? THEME_COLOR_WARN : THEME_COLOR_DIM,
++                          THEME_COLOR_BG);
++    } else {
++        snprintf(buf, sizeof buf, "%d bands", (int)c->count);
++        display_draw_text(8, 157, buf, THEME_COLOR_DIM, THEME_COLOR_BG);
++    }
+ }
+ 
+ static void eq_handle_event(const input_event_t *ev)
+@@ -187,7 +201,7 @@ static uint8_t     s_store_mode;
+ 
+ static int custom_count(void)
+ {
+-    int n = eq_profile_count() - 5;
++    int n = eq_profile_count() - eq_profile_builtin_count();
+ 
+     return (n > 0) ? n : 0;
+ }
+@@ -209,7 +223,7 @@ static void prof_draw(void)
+         int customs = custom_count();
+ 
+         for (i = 0; i < customs; i++) {
+-            items[n].label = eq_profile_entry_name(5 + i);
++            items[n].label = eq_profile_entry_name(eq_profile_builtin_count() + i);
+             items[n].value_text = 0;
+             items[n].on_select = 0;
+             n++;
+@@ -270,7 +284,7 @@ static void prof_handle_event(const input_event_t *ev)
+     case KEY_SELECT:
+         if (s_store_mode) {
+             if (s_prof_view.cursor < custom_count() &&
+-                eq_profile_save_to_row(5 + s_prof_view.cursor) == 0)
++                eq_profile_save_to_row(eq_profile_builtin_count() + s_prof_view.cursor) == 0)
+                 ui_pop_screen();
+         } else if (s_prof_view.cursor == eq_profile_count()) {
+             if (custom_count() > 0) {
 diff --git a/firmware/ui/screens/library_cat_screen.c b/firmware/ui/screens/library_cat_screen.c
-index ca6f078..b66fe98 100644
+index 43f3fdb..e90f220 100644
 --- a/firmware/ui/screens/library_cat_screen.c
 +++ b/firmware/ui/screens/library_cat_screen.c
-@@ -29,7 +29,7 @@ static int cat_rows(void)
+@@ -30,7 +30,7 @@ static int cat_rows(void)
  
  typedef struct {
      int  cat;
@@ -859,87 +2256,101 @@ index ca6f078..b66fe98 100644
      int  cursor;
      int  top;
      char value[24];            /* the chosen name (songs mode) */
-@@ -37,6 +37,7 @@ typedef struct {
+@@ -38,6 +38,8 @@ typedef struct {
  
  static cat_state_t s_cat;
  static int s_use_skin;
 +static int s_armed;        /* Neon Drive: PLAY went down on THIS screen */
++static unsigned s_gen;     /* Neon Drive: mq generation of our live query */
  
  static unsigned cat_total(void);
- 
-@@ -86,17 +87,35 @@ void library_cat_open(int cat)
-         (void)mq_names_init(s_cat.cat);
- }
- 
--static unsigned cat_total(void)
+ static void cat_ensure_visible(unsigned total);
+@@ -116,6 +118,10 @@ static int cat_is_special(int cat)
+ /* (Re)build the current view. Special entries have no names step. */
+ static int cat_query_init(void)
+ {
++    if (s_cat.mode == 2)
++        return mq_search_init(s_cat.value);
++    if (s_cat.cat == MQ_PLAYLISTS)
++        return s_cat.mode ? mq_playlist_init(s_cat.value) : mq_playlists_init();
+     if (!s_cat.mode)
+         return mq_names_init(s_cat.cat);
+     if (s_cat.cat == MQ_FAVORITES)
+@@ -136,6 +142,18 @@ void library_cat_open(int cat)
+     s_cat.top = 0;
+     s_cat.value[0] = '\0';
+     (void)cat_query_init();
++    s_gen = mq_generation();
++}
++
 +/* Neon Drive: search results reuse the song list (title-sorted). */
 +void library_cat_open_search(const char *query)
- {
--    return s_cat.mode ? mq_filter_count() : mq_names_count();
++{
 +    s_cat.cat = MQ_ALL;
 +    s_cat.mode = 2;
 +    s_cat.cursor = 0;
 +    s_cat.top = 0;
 +    snprintf(s_cat.value, sizeof s_cat.value, "%s", query != 0 ? query : "");
++    s_gen = 0;
  }
  
--static void cat_on_enter(void)
-+static void cat_query(void)
+ static unsigned cat_total(void)
+@@ -145,7 +163,13 @@ static unsigned cat_total(void)
+ 
+ static void cat_on_enter(void)
  {
--    if (s_cat.mode)
-+    if (s_cat.mode == 2)
-+        (void)mq_search_init(s_cat.value);
-+    else if (s_cat.mode)
-         (void)mq_filter_init(s_cat.cat, s_cat.value[0] ? s_cat.value : 0);
-     else
-         (void)mq_names_init(s_cat.cat);
-+}
-+
-+static unsigned cat_total(void)
-+{
-+    return s_cat.mode ? mq_filter_count() : mq_names_count();
-+}
-+
-+static void cat_on_enter(void)
-+{
+-    (void)cat_query_init();
 +    s_armed = 0;
-+    cat_query();
++    /* Neon Drive: coming back from A-Z (or anything that did not touch the
++     * index) keeps the list we already have instead of re-reading it. */
++    if (s_gen == 0u || s_gen != mq_generation()) {
++        (void)cat_query_init();
++        s_gen = mq_generation();
++    }
      s_use_skin = theme_ui_load(THEME_UI_LIBRARY_CAT);
      s_source.count = (int)cat_total();
      if (s_use_skin)
-@@ -119,7 +138,9 @@ static void cat_draw(void)
+@@ -168,7 +192,9 @@ static void cat_draw(void)
      if (s_use_skin) {
          theme_skin_state_t st;
  
--        if (s_cat.mode)
+-        if (s_cat.mode && s_cat.value[0] != '\0')
 +        if (s_cat.mode == 2)
 +            snprintf(title, sizeof title, "Search / %s", s_cat.value);
-+        else if (s_cat.mode)
++        else if (s_cat.mode && s_cat.value[0] != '\0')
              snprintf(title, sizeof title, "%s / %s",
                       mq_category_name(s_cat.cat), s_cat.value);
          else
-@@ -134,7 +155,9 @@ static void cat_draw(void)
+@@ -183,7 +209,9 @@ static void cat_draw(void)
      display_clear(THEME_COLOR_BG);
      display_fill_rect(0, 0, DISPLAY_W - 1, THEME_TITLE_H - 1,
                        THEME_COLOR_TITLE_BG);
--    if (s_cat.mode)
+-    if (s_cat.mode && s_cat.value[0] != '\0')
 +    if (s_cat.mode == 2)
 +        snprintf(title, sizeof title, "Search / %s", s_cat.value);
-+    else if (s_cat.mode)
++    else if (s_cat.mode && s_cat.value[0] != '\0')
          snprintf(title, sizeof title, "%s / %s",
                   mq_category_name(s_cat.cat), s_cat.value);
      else
-@@ -177,7 +200,8 @@ static void cat_play(int idx)
-     /* BRNOMT-90: play the whole filtered list, starting here — the player
+@@ -263,7 +291,8 @@ static void cat_play(int idx)
       * shows "i/N" and auto-advances through the rest. The source is set first
       * so ReplayGain AUTO can resolve the first track as album playback. */
--    player_set_queue_source(PLAYER_QUEUE_CAT, s_cat.value, s_cat.cat);
-+    player_set_queue_source(PLAYER_QUEUE_CAT,
-+                            s_cat.mode == 2 ? "" : s_cat.value, s_cat.cat);
+     if (s_cat.cat < MQ_COUNT)
+-        player_set_queue_source(PLAYER_QUEUE_CAT, s_cat.value, s_cat.cat);
++        player_set_queue_source(PLAYER_QUEUE_CAT,
++                                s_cat.mode == 2 ? "" : s_cat.value, s_cat.cat);
+     else
+         player_set_queue_source(PLAYER_QUEUE_NONE, "", -1);
      {
-         int rc = player_play_list(list, (int)n, idx);
- 
-@@ -227,13 +251,68 @@ static void cat_ensure_visible(unsigned total)
+@@ -273,6 +302,7 @@ static void cat_play(int idx)
+          * keeping it open during playback leaves only one free FS handle, and
+          * the gapless pre-open needs two (ring + AP codec) -> "open failed". */
+         mq_done();
++        s_gen = 0;
+         if (rc != PLAYER_OK) {
+             player_screen_set_status("cannot open track");
+             return;
+@@ -315,18 +345,71 @@ static void cat_ensure_visible(unsigned total)
          s_cat.top = ((int)total > rows) ? (int)total - rows : 0;
  }
  
@@ -983,21 +2394,29 @@ index ca6f078..b66fe98 100644
      unsigned total = cat_total();
      int key = ev->type;
  
--    if (ev->kind == INPUT_LONG || ev->kind == INPUT_RELEASE)
-+    /* PLAY: a short press opens/plays on RELEASE; holding it opens A-Z.
-+     * (PRESS is too early to tell the two apart.) */
+-    if (ev->kind == INPUT_LONG) {
+-        if (key == KEY_SELECT)
+-            cat_toggle_favorite();
+-        return;
+-    }
+-    if (ev->kind == INPUT_RELEASE)
++    /* PLAY: a short press acts on RELEASE; holding it opens A-Z in the
++     * alphabetical lists and toggles the favorite in album-order song
++     * lists. Only a press that started on this screen counts (the press
++     * that opened it belonged to the previous screen). */
 +    if (ev->type == KEY_SELECT) {
-+        /* only a press that started on this screen (the one that opened it
-+         * was the previous screen's) */
 +        if (ev->kind == INPUT_PRESS) {
 +            s_armed = 1;
 +            return;
 +        }
 +        if (!s_armed)
 +            return;
-+        if (ev->kind == INPUT_LONG && cat_az_ok() && total > 0u) {
++        if (ev->kind == INPUT_LONG) {
 +            s_armed = 0;
-+            cat_open_az();
++            if (total > 0u && cat_az_ok())
++                cat_open_az();
++            else
++                cat_toggle_favorite();
 +            return;
 +        }
 +        if (ev->kind != INPUT_RELEASE)
@@ -1009,41 +2428,63 @@ index ca6f078..b66fe98 100644
  
      if (s_use_skin) {
          int nav;
-@@ -291,7 +370,7 @@ static void cat_handle_event(const input_event_t *ev)
+@@ -379,18 +462,21 @@ static void cat_handle_event(const input_event_t *ev)
+             s_cat.mode = 1;
+             s_cat.cursor = 0;
+             s_cat.top = 0;
+-            (void)mq_filter_init(s_cat.cat, s_cat.value);
++            (void)cat_query_init();
++            s_gen = mq_generation();
+             ui_invalidate_all();
          }
          break;
      case KEY_BACK:
--        if (s_cat.mode && s_cat.cat != MQ_ALL) {
-+        if (s_cat.mode == 1 && s_cat.cat != MQ_ALL) {
+-        if (s_cat.mode && s_cat.cat != MQ_ALL && s_cat.cat < MQ_COUNT) {
++        if (s_cat.mode == 1 && s_cat.cat != MQ_ALL &&
++            (s_cat.cat < MQ_COUNT || s_cat.cat == MQ_PLAYLISTS)) {
              /* back to the names of this category */
              s_cat.mode = 0;
              s_cat.value[0] = '\0';
+             s_cat.cursor = 0;
+             s_cat.top = 0;
+-            (void)mq_names_init(s_cat.cat);
++            (void)cat_query_init();
++            s_gen = mq_generation();
+             ui_invalidate_all();
+         } else {
+             ui_pop_screen();
 diff --git a/firmware/ui/screens/library_screen.c b/firmware/ui/screens/library_screen.c
-index 0a58d39..5dbc0d6 100644
+index b8aff77..db0ccd5 100644
 --- a/firmware/ui/screens/library_screen.c
 +++ b/firmware/ui/screens/library_screen.c
-@@ -33,7 +33,10 @@ static void open_label(void)        { open_cat(MQ_LABEL); }
+@@ -32,11 +32,16 @@ static void open_year(void)         { open_cat(MQ_YEAR); }
+ static void open_label(void)        { open_cat(MQ_LABEL); }
  static void open_album_artist(void) { open_cat(MQ_ALBUM_ARTIST); }
  static void open_composer(void)     { open_cat(MQ_COMPOSER); }
++static void open_playlists(void)    { open_cat(MQ_PLAYLISTS); }
+ static void open_favorites(void)    { open_cat(MQ_FAVORITES); }
+ static void open_recent(void)       { open_cat(MQ_RECENT); }
+ static void open_most_played(void)  { open_cat(MQ_MOST_PLAYED); }
  
--static const menu_item_t k_items[MQ_COUNT] = {
-+#define LIB_N (MQ_COUNT + 1)
+-static const menu_item_t k_items[MQ_LIBRARY_ITEMS] = {
++#define LIB_N (MQ_LIBRARY_ITEMS + 2)
 +
 +static const menu_item_t k_items[LIB_N] = {
 +    { "Search",       NULL, search_screen_open },     /* Neon Drive */
++    { "Playlists",    NULL, open_playlists },         /* Neon Drive */
      { "All Songs",    NULL, open_all },
      { "Album",        NULL, open_album },
      { "Artist",       NULL, open_artist },
-@@ -44,18 +47,18 @@ static const menu_item_t k_items[MQ_COUNT] = {
-     { "Composer",     NULL, open_composer },
+@@ -50,18 +55,18 @@ static const menu_item_t k_items[MQ_LIBRARY_ITEMS] = {
+     { "Most played",     NULL, open_most_played },
  };
  
--static const menu_model_t k_model = { "Library", k_items, MQ_COUNT };
+-static const menu_model_t k_model = { "Library", k_items, MQ_LIBRARY_ITEMS };
 +static const menu_model_t k_model = { "Library", k_items, LIB_N };
  
  static const char *lib_label(int index, char *buf, int cap)
  {
--    if (index < 0 || index >= MQ_COUNT)
+-    if (index < 0 || index >= MQ_LIBRARY_ITEMS)
 +    if (index < 0 || index >= LIB_N)
          return "";
      snprintf(buf, (size_t)cap, "%s", k_items[index].label);
@@ -1051,48 +2492,149 @@ index 0a58d39..5dbc0d6 100644
  }
  
  static const theme_skin_list_source_t k_source = {
--    MQ_COUNT, lib_label, 0
+-    MQ_LIBRARY_ITEMS, lib_label, 0
 +    LIB_N, lib_label, 0
  };
  
  static void lib_on_enter(void)
-@@ -98,10 +101,10 @@ static void lib_handle_event(const input_event_t *ev)
+@@ -104,10 +109,10 @@ static void lib_handle_event(const input_event_t *ev)
          nav = theme_ui_nav(ev->type);
          if (nav == THEME_SKIN_PREV || nav == THEME_SKIN_NEXT) {
              menu_view_move(&s_view, nav == THEME_SKIN_PREV ? -1 : +1,
--                           MQ_COUNT, rows);
+-                           MQ_LIBRARY_ITEMS, rows);
 +                           LIB_N, rows);
              ui_invalidate_all();
          } else if (nav == THEME_SKIN_SELECT) {
--            if (s_view.cursor >= 0 && s_view.cursor < MQ_COUNT)
+-            if (s_view.cursor >= 0 && s_view.cursor < MQ_LIBRARY_ITEMS)
 +            if (s_view.cursor >= 0 && s_view.cursor < LIB_N)
                  k_items[s_view.cursor].on_select();
          } else if (nav == THEME_SKIN_BACK) {
              ui_pop_screen();
-@@ -111,15 +114,15 @@ static void lib_handle_event(const input_event_t *ev)
+@@ -117,15 +122,15 @@ static void lib_handle_event(const input_event_t *ev)
  
      switch (ev->type) {
      case KEY_UP:
--        menu_view_move(&s_view, -1, MQ_COUNT, menu_page_size());
+-        menu_view_move(&s_view, -1, MQ_LIBRARY_ITEMS, menu_page_size());
 +        menu_view_move(&s_view, -1, LIB_N, menu_page_size());
          ui_invalidate_all();
          break;
      case KEY_DOWN:
--        menu_view_move(&s_view, +1, MQ_COUNT, menu_page_size());
+-        menu_view_move(&s_view, +1, MQ_LIBRARY_ITEMS, menu_page_size());
 +        menu_view_move(&s_view, +1, LIB_N, menu_page_size());
          ui_invalidate_all();
          break;
      case KEY_SELECT:
--        if (s_view.cursor >= 0 && s_view.cursor < MQ_COUNT)
+-        if (s_view.cursor >= 0 && s_view.cursor < MQ_LIBRARY_ITEMS)
 +        if (s_view.cursor >= 0 && s_view.cursor < LIB_N)
              k_items[s_view.cursor].on_select();
          break;
      case KEY_BACK:
+diff --git a/firmware/ui/screens/menu_screen.c b/firmware/ui/screens/menu_screen.c
+index 2407857..d17cbf6 100644
+--- a/firmware/ui/screens/menu_screen.c
++++ b/firmware/ui/screens/menu_screen.c
+@@ -75,35 +75,48 @@ int menu_page_size(void)
+ 
+ /* ---- rendering --------------------------------------------------------- */
+ 
++/* Neon Drive: the compiled lists (classic menu, System, Quick settings,
++ * EQ picker, playlist...) share the theme's cyber-terminal look: marker +
++ * title, a rule, corner brackets, an accent selection bar with a danger
++ * marker, values in the "success" colour. Geometry is unchanged (same rows,
++ * same page size), only the paint. Colours come from the active palette. */
+ void menu_draw_item(int y, const char *label, const char *value, bool selected)
+ {
+-    int vy = y + THEME_TEXT_YOFF;
++    int vy = y + THEME_TEXT_YOFF + (THEME_ITEM_H - 10) / 2;
+     uint16_t row_bg = THEME_COLOR_BG;
+-    uint16_t label_fg = THEME_COLOR_DIM;
+-    uint16_t value_fg = THEME_COLOR_FG;
++    uint16_t label_fg = THEME_COLOR_FG;
++    uint16_t value_fg = THEME_COLOR_WARM;
+ 
++    if (vy < y + THEME_TEXT_YOFF)
++        vy = y + THEME_TEXT_YOFF;
+     if (selected) {
+-        /* True INVERSION (solid bar, glyphs punched out of it), the one focus
+-         * treatment every list shares (BRNOMT-72). A tinted highlight cannot
+-         * express this with the monochrome palette. */
+-        display_fill_rect(0, y, DISPLAY_W - 1, y + THEME_ITEM_H - 1,
+-                          THEME_COLOR_FG);
+-        row_bg = THEME_COLOR_FG;
++        display_fill_rect(6, y, DISPLAY_W - 7, y + THEME_ITEM_H - 2,
++                          THEME_COLOR_ACCENT);
++        display_fill_rect(6, y, 8, y + THEME_ITEM_H - 2, THEME_COLOR_WARN);
++        row_bg = THEME_COLOR_ACCENT;
+         label_fg = THEME_COLOR_BG;
+         value_fg = THEME_COLOR_BG;
+     }
+ 
+-    display_draw_text(THEME_PAD, vy,
++    display_draw_text(THEME_PAD + 8, vy,
+                       label ? label : "",
+                       label_fg, row_bg);
+     if (value && value[0] != '\0') {
+-        int x = DISPLAY_W - THEME_PAD - THEME_TEXT_W((int)strlen(value));
++        int x = DISPLAY_W - THEME_PAD - 6 - THEME_TEXT_W((int)strlen(value));
+         if (x < THEME_PAD)
+             x = THEME_PAD;
+         display_draw_text(x, vy, value, value_fg, row_bg);
+     }
+ }
+ 
++static void menu_corner(int x, int y, int dx, int dy)
++{
++    uint16_t c = THEME_COLOR_WARN;
++
++    display_fill_rect(dx > 0 ? x : x - 7, y, dx > 0 ? x + 7 : x, y + 1, c);
++    display_fill_rect(x, dy > 0 ? y : y - 6, x + 1, dy > 0 ? y + 6 : y, c);
++}
++
+ void menu_draw(const menu_model_t *model, const menu_view_t *view)
+ {
+     int page = menu_page_size();
+@@ -112,15 +125,17 @@ void menu_draw(const menu_model_t *model, const menu_view_t *view)
+ 
+     display_clear(THEME_COLOR_BG);
+ 
+-    /* title bar */
+-    display_fill_rect(0, 0, DISPLAY_W - 1, THEME_TITLE_H - 1,
+-                      THEME_COLOR_TITLE_BG);
+-    display_draw_text(THEME_PAD, THEME_TITLE_TEXT_Y + THEME_TEXT_YOFF,
++    /* title: marker, text, rule (no filled band) */
++    display_fill_rect(0, 3, 2, THEME_TITLE_H - 6, THEME_COLOR_WARN);
++    display_draw_text(THEME_PAD + 4, THEME_TITLE_TEXT_Y + THEME_TEXT_YOFF + 1,
+                       model->title ? model->title : "",
+-                      THEME_COLOR_ACCENT, THEME_COLOR_TITLE_BG);
+-    /* One-pixel rule under the title: grouping without a colored band. */
+-    display_fill_rect(0, THEME_TITLE_H - 1, DISPLAY_W - 1, THEME_TITLE_H - 1,
+-                      THEME_COLOR_FG);
++                      THEME_COLOR_WARM, THEME_COLOR_BG);
++    display_fill_rect(6, THEME_TITLE_H - 2, DISPLAY_W - 7, THEME_TITLE_H - 2,
++                      THEME_COLOR_ACCENT);
++    menu_corner(1, THEME_TITLE_H + 1, 1, 1);
++    menu_corner(DISPLAY_W - 2, THEME_TITLE_H + 1, -1, 1);
++    menu_corner(1, DISPLAY_H - 2, 1, -1);
++    menu_corner(DISPLAY_W - 2, DISPLAY_H - 2, -1, -1);
+ 
+     /* optional right-aligned status on the title row (BRNOMT-72) */
+     if (model->status_text != 0) {
+@@ -130,8 +145,8 @@ void menu_draw(const menu_model_t *model, const menu_view_t *view)
+             int tx = DISPLAY_W - THEME_PAD - THEME_TEXT_W((int)strlen(st));
+ 
+             if (tx > THEME_PAD)
+-                display_draw_text(tx, THEME_TITLE_TEXT_Y + THEME_TEXT_YOFF,
+-                                  st, THEME_COLOR_DIM, THEME_COLOR_TITLE_BG);
++                display_draw_text(tx, THEME_TITLE_TEXT_Y + THEME_TEXT_YOFF + 1,
++                                  st, THEME_COLOR_DIM, THEME_COLOR_BG);
+         }
+     }
+ 
 diff --git a/firmware/ui/screens/screens.h b/firmware/ui/screens/screens.h
-index 69f2ab8..de6b935 100644
+index f18ae4b..53eb7e6 100644
 --- a/firmware/ui/screens/screens.h
 +++ b/firmware/ui/screens/screens.h
-@@ -170,6 +170,14 @@ void settings_screen_set_theme_applied(void (*cb)(void));
+@@ -174,6 +174,14 @@ void settings_screen_set_theme_applied(void (*cb)(void));
  extern const ui_screen_t library_screen;       /* category menu */
  extern const ui_screen_t library_cat_screen;   /* names -> songs  */
  void library_cat_open(int cat);                /* set the category before pushing */
@@ -1386,7 +2928,7 @@ index 6a65287..e9599ad 100644
  
  /* Repaint just the package's dynamic primitives (0 = no dyn rects). */
 diff --git a/firmware/ui/screens/theme_ui.c b/firmware/ui/screens/theme_ui.c
-index bed6ed3..bba0855 100644
+index 58aa202..03b1399 100644
 --- a/firmware/ui/screens/theme_ui.c
 +++ b/firmware/ui/screens/theme_ui.c
 @@ -1,6 +1,7 @@
@@ -1397,7 +2939,52 @@ index bed6ed3..bba0855 100644
  #include <string.h>
  
  #include "theme_ui.h"
-@@ -102,7 +103,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+@@ -9,6 +10,7 @@
+ #include "../../theme/theme_pkg.h"
+ #include "../../theme/theme_runtime.h"
+ #include "../../services/art_pack.h"
++#include "../../services/fs.h"
+ #include "../../services/bt_link.h"
+ #include "../../services/rechord_files.h"
+ 
+@@ -93,6 +95,36 @@ void theme_ui_note_input(void)
+     s_last_input_ms = s_now_ms;
+ }
+ 
++/* Neon Drive: average bitrate = file size / duration, measured once per
++ * track (one directory lookup + no data read), cached by path hash. */
++static int track_kbps(const char *path, long dur_ms)
++{
++    static unsigned s_hash;
++    static int s_kbps;
++    unsigned h = 2166136261u;
++    const char *p;
++    fs_file_t *f;
++
++    if (path == 0 || path[0] == '\0' || dur_ms <= 0)
++        return 0;
++    for (p = path; *p; p++)
++        h = (h ^ (unsigned char)*p) * 16777619u;
++    h ^= (unsigned)dur_ms;
++    if (h == s_hash)
++        return s_kbps;
++    s_hash = h;
++    s_kbps = 0;
++    f = fs_open_read(path);
++    if (f != 0) {
++        long sz = fs_file_size(f);
++
++        fs_close(f);
++        if (sz > 0)
++            s_kbps = (int)(((unsigned long long)sz * 8u) / (unsigned long long)dur_ms);
++    }
++    return s_kbps;
++}
++
+ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+ {
+     if (st == 0)
+@@ -103,7 +135,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
      st->paused = player_get_state() == PLAYER_PAUSED;
      st->stopped = player_get_state() == PLAYER_STOPPED;
      st->volume_db = player_get_volume();
@@ -1406,22 +2993,60 @@ index bed6ed3..bba0855 100644
      st->position_ms = player_get_position_ms();
      st->shuffle = player_get_shuffle();
      st->repeat = player_get_repeat();
+@@ -131,6 +163,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+         st->sample_rate = s_track.sample_rate;
+         st->playlist_pos = s_track.playlist_pos;
+         st->playlist_count = s_track.playlist_count;
++        st->kbps = track_kbps(s_track.path, s_track.duration_ms);
+     }
+ }
+ 
+@@ -147,7 +180,7 @@ int theme_ui_draw_dynamic(const theme_skin_state_t *st, int sel, int top)
+     theme_skin_set_dynamic_only(1);
+     theme_skin_render(s_now_ms, s_now_ms - s_last_input_ms, sel, top, st);
+     theme_skin_set_dynamic_only(0);
+-    for (i = 0; i < 3; i++) {
++    for (i = 0; i < THEME_SKIN_DYN_MAX; i++) {
+         int x0, y0, x1, y1;
+ 
+         if (theme_skin_dyn_rect(i, &x0, &y0, &x1, &y1) == 0) {
+diff --git a/firmware/ui/tests/mock_eq.c b/firmware/ui/tests/mock_eq.c
+index 8f318a4..78f0103 100644
+--- a/firmware/ui/tests/mock_eq.c
++++ b/firmware/ui/tests/mock_eq.c
+@@ -56,6 +56,7 @@ int eq_profile_save(void) { mock_eq_save_calls++; return 0; }
+ int eq_profile_scan(void) { return eq_profile_count(); }
+ 
+ int eq_profile_count(void) { return 5 + s_custom; }
++int eq_profile_builtin_count(void) { return 5; }
+ 
+ const char *eq_profile_entry_name(int index)
+ {
 diff --git a/firmware/ui/tests/mock_services.c b/firmware/ui/tests/mock_services.c
-index 51c6202..4e89665 100644
+index 6d4fd07..a4b42b2 100644
 --- a/firmware/ui/tests/mock_services.c
 +++ b/firmware/ui/tests/mock_services.c
-@@ -607,3 +607,6 @@ int art_pack_draw(int x, int y, int large)
-     (void)large;
-     return -1;
+@@ -744,3 +744,15 @@ unsigned extras_most_played_order(unsigned char *order, unsigned cap)
+     (void)cap;
+     return 0;
  }
-+
 +/* Neon Drive: theme_ui reads the gauge for skins */
 +int battery_percent(void) { return -1; }
++
++/* Neon Drive: theme_ui measures the track's file size (kbps); no files here */
++fs_file_t *fs_open_read(const char *path) { (void)path; return 0; }
++long fs_file_size(fs_file_t *f) { (void)f; return -1; }
++void fs_close(fs_file_t *f) { (void)f; }
++int fs_list_dir_each(const char *path, fs_dirent_cb cb) { (void)path; (void)cb; return 0; }
++long fs_read(fs_file_t *f, void *buf, unsigned long cap) { (void)f; (void)buf; (void)cap; return -1; }
++int art_pack_blit_file(const char *path, int x, int y, int w, int h,
++                       int sx, int sy, int sw, void (*pump)(void))
++{ (void)path; (void)x; (void)y; (void)w; (void)h; (void)sx; (void)sy; (void)sw; (void)pump; return -1; }
 diff --git a/firmware/ui/tests/run_tests.sh b/firmware/ui/tests/run_tests.sh
-index 3789e62..6ed0345 100644
+index 968950c..433f204 100644
 --- a/firmware/ui/tests/run_tests.sh
 +++ b/firmware/ui/tests/run_tests.sh
-@@ -29,6 +29,7 @@ $CC $CFLAGS -I.. -I../.. -I../../services -I../../player -o .work/ui_tests \
+@@ -32,6 +32,7 @@ $CC $CFLAGS -I.. -I../.. -I../../services -I../../player -o .work/ui_tests \
      ../../theme/theme.c ../../theme/themes_builtin.c ../../theme/theme_pkg.c \
      ../../theme/theme_file.c ../../theme/theme_runtime.c \
      ../../theme/theme_assets.c ../../theme/theme_skin.c \
@@ -1429,6 +3054,106 @@ index 3789e62..6ed0345 100644
      mock_display.c mock_services.c mock_eq.c -lm
  
  .work/ui_tests
+diff --git a/firmware/ui/tests/test_eq_screen.c b/firmware/ui/tests/test_eq_screen.c
+index 59f2d78..5ed4eb9 100644
+--- a/firmware/ui/tests/test_eq_screen.c
++++ b/firmware/ui/tests/test_eq_screen.c
+@@ -52,9 +52,8 @@ void test_eq_screen(void)
+     CHECK(mock_display_text_find("Enabled") >= 0);
+     CHECK(mock_display_text_find("Off") >= 0);
+     CHECK(mock_display_text_find("Profile") >= 0);
+-    CHECK(mock_display_text_find("31 Hz") >= 0);
+-    CHECK(mock_display_text_find("1 kHz") >= 0);
+-    CHECK(mock_display_text_find("0.0") >= 0);
++    CHECK(mock_display_text_find("31") >= 0);      /* graphic EQ labels */
++    CHECK(mock_display_text_find("1K") >= 0);
+ 
+     /* Enabled row: SELECT toggles the effect. */
+     press(KEY_SELECT);
+@@ -64,7 +63,11 @@ void test_eq_screen(void)
+ 
+     /* Move to Band 1 (rows: Enabled, Profile, Band 1). */
+     key_n(KEY_DOWN, 2);
++    ui_render();
++    CHECK(mock_display_text_find("31 Hz") >= 0);   /* detail of the band */
++    CHECK(mock_display_text_find("0.0") >= 0);
+     press(KEY_SELECT);                 /* enter edit mode */
++    mock_display_reset();
+     ui_render();
+     CHECK(mock_display_text_find("EDIT") >= 0);
+ 
+diff --git a/firmware/ui/tests/test_library_extras_ui.c b/firmware/ui/tests/test_library_extras_ui.c
+index 0e85e09..a96358c 100644
+--- a/firmware/ui/tests/test_library_extras_ui.c
++++ b/firmware/ui/tests/test_library_extras_ui.c
+@@ -39,13 +39,16 @@ void test_library_extras_ui(void)
+ 
+     CHECK(ui_push_screen(&library_screen));
+     ui_render();
+-    /* The three extra rows sit after the eight tag categories. */
+-    for (i = 0; i < 8; i++)
++    /* The three extra rows sit after Search, Playlists (Neon Drive) and the
++     * eight tag categories. */
++    for (i = 0; i < 12; i++)
+         press(KEY_DOWN);
+     ui_render();
+     CHECK(mock_display_text_find("Favorites") >= 0);
+     CHECK(mock_display_text_find("Recently played") >= 0);
+     CHECK(mock_display_text_find("Most played") >= 0);
++    press(KEY_UP);
++    press(KEY_UP);                      /* back to Favorites */
+ 
+     press(KEY_SELECT);                  /* Favorites */
+     CHECK(ui_top_screen() == &library_cat_screen);
+diff --git a/firmware/ui/tests/test_menu_nav.c b/firmware/ui/tests/test_menu_nav.c
+index cd29052..8edec91 100644
+--- a/firmware/ui/tests/test_menu_nav.c
++++ b/firmware/ui/tests/test_menu_nav.c
+@@ -152,17 +152,17 @@ static void test_menu_screen_keys(void)
+     CHECK(mock_display_text_find("Two") >= 0);
+     CHECK(mock_display_text_find("v1") >= 0);
+ 
+-    /* BRNOMT-72: the selected row ("Two", cursor 1) must be a TRUE INVERSION —
+-     * a solid foreground bar with the label drawn in the background color —
+-     * and a plain row must keep background cells with dim text. */
++    /* Neon Drive (was BRNOMT-72): the selected row ("Two", cursor 1) is a
++     * solid ACCENT bar with the label punched out in the background colour;
++     * a plain row keeps background cells with foreground text. */
+     {
+         int i, bar = 0, sel_label = 0, plain_label = 0;
+ 
+         for (i = 0; i < mock_display_rect_count(); i++) {
+             const mock_rect_t *r = mock_display_rect(i);
+ 
+-            if (r->color == THEME_COLOR_FG && r->x0 == 0 &&
+-                r->x1 == DISPLAY_W - 1 &&
++            if (r->color == THEME_COLOR_ACCENT && r->x0 == 6 &&
++                r->x1 == DISPLAY_W - 7 &&
+                 r->y0 == THEME_MENU_TOP + THEME_ITEM_H)
+                 bar = 1;
+         }
+@@ -170,10 +170,10 @@ static void test_menu_screen_keys(void)
+             const mock_text_t *t = mock_display_text(i);
+ 
+             if (strcmp(t->text, "Two") == 0 &&
+-                t->bg == THEME_COLOR_FG && t->fg == THEME_COLOR_BG)
++                t->bg == THEME_COLOR_ACCENT && t->fg == THEME_COLOR_BG)
+                 sel_label = 1;
+             if (strcmp(t->text, "One") == 0 &&
+-                t->bg == THEME_COLOR_BG && t->fg == THEME_COLOR_DIM)
++                t->bg == THEME_COLOR_BG && t->fg == THEME_COLOR_FG)
+                 plain_label = 1;
+         }
+         CHECK(bar);
+@@ -217,7 +217,7 @@ static void test_theme_layout_drives_list_metrics(void)
+     CHECK(idx >= 0);
+     if (idx >= 0)
+         CHECK_EQ_INT(mock_display_text(idx)->y,
+-                     THEME_MENU_TOP + THEME_TEXT_YOFF);
++                     THEME_MENU_TOP + THEME_TEXT_YOFF + (THEME_ITEM_H - 10) / 2);
+ 
+     theme_layout_reset();
+ }
 diff --git a/firmware/ui/ui.mk b/firmware/ui/ui.mk
 index 3ab222d..5b0617b 100644
 --- a/firmware/ui/ui.mk

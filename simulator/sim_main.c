@@ -28,6 +28,8 @@
 #include "services/rechord_files.h"
 #include "services/scratch.h"
 #include "player/player.h"
+#include "services/library_extras.h"
+#include "startup/neon_fx.h"
 
 #define EXPORT(n) __attribute__((export_name(n)))
 
@@ -38,19 +40,6 @@ void sim_player_advance(unsigned dt_ms);
 /* ---------------------------------------------------------------- stubs */
 void log_printf(const char *fmt, ...) { (void)fmt; }
 int  input_poll(input_event_t *ev) { (void)ev; return 0; }
-int  fs_target_file_rewrite(const char *path, const void *buf, uint32_t len)
-{
-    char host[300];
-    FILE *f;
-
-    snprintf(host, sizeof host, ".%s", path);
-    f = fopen(host, "r+b");
-    if (!f) f = fopen(host, "wb");
-    if (!f) return FS_ERR_OPEN;
-    fwrite(buf, 1, len, f);
-    fclose(f);
-    return FS_OK;
-}
 int battery_percent(void) { return 75; }
 
 /* ---------------------------------------------------------------- library */
@@ -228,6 +217,16 @@ static void vol_nav_apply(input_event_t *ev)
 
 static unsigned s_now, s_face_ms, s_theme_ms, s_player_ms, s_last;
 static int s_screen_off, s_volume_seen;
+/* Neon Drive boot / power-off animations: 0 none, 1 boot, 2 off anim, 3 off */
+static int s_fx;
+static unsigned s_fx_t0;
+
+static void fx_boot(void)
+{
+    s_fx = neon_boot_begin() == 0 ? 1 : 0;
+    s_fx_t0 = s_now ? s_now : 1;   /* 1: start on the first tick */
+    if (!s_fx) ui_invalidate_all();
+}
 
 EXPORT("sim_init") int sim_init(void)
 {
@@ -238,6 +237,7 @@ EXPORT("sim_init") int sim_init(void)
     display_init();
     n = build_library();
     player_init();
+    extras_init();
     player_set_resolver(media_resolve);
     ui_init();
     player_set_callback(player_state_changed, 0);
@@ -260,6 +260,7 @@ EXPORT("sim_init") int sim_init(void)
     settings_screen_set_theme_applied(home_stack_sync);
     home_stack_sync();
     ui_render();
+    fx_boot();
     return n;
 }
 
@@ -273,7 +274,20 @@ EXPORT("sim_key") void sim_key(int type, int kind, int lp)
     ev.kind = kind;
     ev.long_press = lp;
     ev.now_ms = s_now;
+    if (s_fx == 1 || s_fx == 2) return;          /* animations own the screen */
+    if (s_fx == 3) {                              /* "off": power boots again */
+        if (type == KEY_POWER && kind == INPUT_RELEASE) fx_boot();
+        return;
+    }
     if (type == KEY_POWER) {
+        if (kind == INPUT_LONG) {                 /* hold: virus wipe, then off */
+            s_screen_off = 0;
+            if (player_get_state() == PLAYER_PLAYING) (void)player_pause();
+            neon_off_begin();
+            s_fx = 2;
+            s_fx_t0 = s_now;
+            return;
+        }
         if (kind == INPUT_RELEASE && !lp) {
             s_screen_off = !s_screen_off;
             if (!s_screen_off) ui_invalidate_all();
@@ -309,7 +323,16 @@ EXPORT("sim_tick") void sim_tick(unsigned now)
         settings_screen_volume_changed(s_volume_seen, now);
     }
     settings_screen_flush_pending(now);
-    if (s_screen_off) return;
+    if (s_fx == 1) {
+        if (s_fx_t0 == 1) s_fx_t0 = now;
+        if (neon_boot_frame(now - s_fx_t0)) { s_fx = 0; ui_invalidate_all(); ui_render(); }
+        return;
+    }
+    if (s_fx == 2) {
+        if (neon_off_frame(now - s_fx_t0)) s_fx = 3;
+        return;
+    }
+    if (s_fx == 3 || s_screen_off) return;
 
     skin_home_tick(now);
     theme_ui_tick(now);
@@ -349,7 +372,7 @@ EXPORT("sim_fb") uint16_t *sim_fb(void)
             s_fb[y * DISPLAY_W + x] = s_screen_off ? 0 : panel_io_sim_pixel(x, y);
     return s_fb;
 }
-EXPORT("sim_screen_off") int sim_screen_off(void) { return s_screen_off; }
+EXPORT("sim_screen_off") int sim_screen_off(void) { return s_screen_off || s_fx == 3; }
 EXPORT("sim_top") const char *sim_top(void)
 {
     const ui_screen_t *t = ui_top_screen();

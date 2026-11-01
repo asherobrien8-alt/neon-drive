@@ -56,6 +56,9 @@ PALETTE = {
     "win_c":    "#8fe8ff",
     "win_p":    "#ff6fae",
     "street":   "#151030",
+    "off_a":    "#230912",   # dead neon signs (city v3)
+    "off_b":    "#201a11",
+    "off_c":    "#191410",
     # runner
     "camo":     "#5f7f68",
     "glow":     "#1f6f68",

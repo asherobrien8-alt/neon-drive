@@ -1,42 +1,82 @@
-# HOME — neon tag menu + night city (from Jace's mockup).
-# Selected tag flickers like a failing neon tube, stars twinkle, the sun
-# glows with rings radiating out, windows and antenna lights live.
-# Everything animates, so the whole screen refreshes (~10 fps).
+# HOME v2 — painted cyberpunk city (img/city.565) + Night-City style tags.
+# The city is one streamed picture; only small patches animate (dyn rects),
+# so the screen costs a few KB per frame instead of a full redraw:
+#   menu tags (flicker/glitch), the hologram billboard, three neon signs
+#   that stutter, and traffic sliding over the bridge.
 [skin]
 refresh_ms=90
 refresh_h=170
+dyn=0,20,172,158
+dyn2=242,30,267,73
+dyn3=195,69,207,92
+dyn4=295,73,307,96
+dyn5=262,104,316,114
+dyn6=150,135,319,137
 
 [vars]
 fk=(mod(t, 2300) < 70 || (mod(t, 2300) > 2150 && mod(t, 2300) < 2185) || mod(t, 1300) < 22)
-tr=(fk ? {tag_dim} : {tag})
-ph=mod(t / 70, 14)
-pq=mod(t / 70 + 7, 14)
-c1=(ph < 5 ? {ring1} : (ph < 10 ? {ring2} : {ring3}))
-c2=(pq < 5 ? {ring1} : (pq < 10 ? {ring2} : {ring3}))
-al=(mod(t, 1400) < 700 ? {red} : {ring3})
+tr=(fk ? (mod(t, 60) < 30 ? {tag_dim} : {cyan_dk}) : {tag})
+jx=(fk ? 2 - mod(t / 20, 5) : 0)
+gy=27 + mod(t / 30, 13)
+sa=(mod(t, 3100) < 2700 || mod(t, 140) < 60)
+sb=(mod(t + 1700, 4300) < 3900 || mod(t, 110) < 40)
+sc=(mod(t + 900, 5200) < 4300 || mod(t, 190) < 70)
 
 [a]
-type=fill
+type=image
+file="img/city.565"
 x=0
 y=0
-w=W
-h=H
-color={sky}
+w=320
+h=170
 
-[hm]
+# ---------------------------------------------------------------- header
+[lg]
 type=text
 x=8
-y=6
-text="HOME"
-color={cyan_dk}
+y=5
+text="NEON"
+color={white}
 bg=none
+
+[lg2]
+type=text
+x=40
+y=5
+text="//DRIVE"
+color={tag}
+bg=none
+
+[ru]
+type=fill
+x=8
+y=15
+w=100
+h=1
+color={tag}
+
+[ru2]
+type=fill
+x=108
+y=15
+w=30
+h=1
+color={cyan_dk}
 
 [bt]
 type=text
-x=154
-y=6
-text=(battery < 0 ? "--" : battery + "%")
+x=314
+y=5
+text=(battery < 0 ? "PWR --" : "PWR " + battery + "%")
 align=right
+color=(battery >= 0 && battery < 15 ? {tag} : {white})
+bg=none
+
+[ft]
+type=text
+x=8
+y=161
+text="SYS.ONLINE // 2077"
 color={dim}
 bg=none
 
@@ -44,479 +84,268 @@ bg=none
 [t0]
 type=quad
 x=4
-y=20
-w=152
-h=22
+y=22
+w=160
+h=21
 skew=8
-lw=2
+lw=1
 color=(sel == 0 ? tr : {sky})
-line=(sel == 0 ? tr : {cyan})
+line=(sel == 0 ? tr : {cyan_dk})
+dyn=1
 
 [t1]
 type=quad
 x=4
-y=48
-w=152
-h=22
+y=49
+w=160
+h=21
 skew=8
-lw=2
+lw=1
 color=(sel == 1 ? tr : {sky})
-line=(sel == 1 ? tr : {cyan})
+line=(sel == 1 ? tr : {cyan_dk})
+dyn=1
 
 [t2]
 type=quad
 x=4
 y=76
-w=152
-h=22
+w=160
+h=21
 skew=8
-lw=2
+lw=1
 color=(sel == 2 ? tr : {sky})
-line=(sel == 2 ? tr : {cyan})
+line=(sel == 2 ? tr : {cyan_dk})
+dyn=1
 
 [t3]
 type=quad
 x=4
-y=104
-w=152
-h=22
+y=103
+w=160
+h=21
 skew=8
-lw=2
+lw=1
 color=(sel == 3 ? tr : {sky})
-line=(sel == 3 ? tr : {cyan})
+line=(sel == 3 ? tr : {cyan_dk})
+dyn=1
 
 [t4]
 type=quad
 x=4
-y=132
-w=152
-h=22
+y=130
+w=160
+h=21
 skew=8
-lw=2
+lw=1
 color=(sel == 4 ? tr : {sky})
-line=(sel == 4 ? tr : {cyan})
+line=(sel == 4 ? tr : {cyan_dk})
+dyn=1
+
+# glitch slice through the selected tag while it stutters
+[sl]
+type=fill
+x=18
+y=sel * 27 + gy - 5
+w=96 + mod(t, 40)
+h=2
+color={cyan}
+visible=fk
+dyn=1
+
+# selected-row marker, inside the tag so it repaints clean
+[mk]
+type=fill
+x=12
+y=sel * 27 + 29
+w=3
+h=7
+color=(fk ? {cyan} : {white})
+dyn=1
 
 [l0]
 type=text
-x=16
-y=27
-text="FILE BROWSER"
+x=22 + (sel == 0 ? jx : 0)
+y=29
+text="01  FILE BROWSER"
 color=(sel == 0 ? {white} : {cyan})
 bg=none
+dyn=1
 
 [l1]
 type=text
-x=16
-y=55
-text="MEDIA LIBRARY"
+x=22 + (sel == 1 ? jx : 0)
+y=56
+text="02  MEDIA LIBRARY"
 color=(sel == 1 ? {white} : {cyan})
 bg=none
+dyn=1
 
 [l2]
 type=text
-x=16
+x=22 + (sel == 2 ? jx : 0)
 y=83
-text="PLAYING"
+text="03  NOW PLAYING"
 color=(sel == 2 ? {white} : {cyan})
 bg=none
+dyn=1
 
 [l3]
 type=text
-x=16
-y=111
-text="MUSIC SETTINGS"
+x=22 + (sel == 3 ? jx : 0)
+y=110
+text="04  MUSIC SETUP"
 color=(sel == 3 ? {white} : {cyan})
 bg=none
+dyn=1
 
 [l4]
 type=text
-x=16
-y=139
-text="SYSTEM SETTINGS"
+x=22 + (sel == 4 ? jx : 0)
+y=137
+text="05  SYSTEM"
 color=(sel == 4 ? {white} : {cyan})
 bg=none
+dyn=1
 
 [m]
 type=list
 axis=vertical
-y=20
-height=28
+y=22
+height=27
 rows=5
 selected=2
 item0=FILE BROWSER:files
 item1=MEDIA LIBRARY:library
-item2=PLAYING:player
-item3=MUSIC SETTINGS:settings
-item4=SYSTEM SETTINGS:system
+item2=NOW PLAYING:player
+item3=MUSIC SETUP:settings
+item4=SYSTEM:system
 visible=0
 
-# ---------------------------------------------------------------- sky
-[s1]
-type=dots
-x=164
-y=4
-w=154
-h=74
-sx=9
-sy=7
-density=24
-seed=7
-blink=650
-color={star}
-
-[s2]
-type=dots
-x=168
-y=6
-w=150
-h=60
-sx=13
-sy=11
-dw=2
-density=9
-seed=3
-blink=1100
-color={white}
-
-[r1]
-type=ring
-x=250
-y=96
-r=44 + ph
-color=c1
-
-[r2]
-type=ring
-x=250
-y=96
-r=44 + pq
-color=c2
-
-[gl]
-type=roundrect
-x=208 - sin(t, 1800, 1)
-y=54 - sin(t, 1800, 1)
-w=84 + 2 * sin(t, 1800, 1)
-h=84 + 2 * sin(t, 1800, 1)
-r=42 + sin(t, 1800, 1)
-color={ring3}
-
-[u1]
-type=roundrect
-x=210
-y=56
-w=80
-h=80
-r=40
-color={sun_hi}
-
-[u2]
-type=roundrect
-x=210
-y=68
-w=80
-h=80
-r=40
-color={sun_or}
-
-[u3]
-type=roundrect
-x=210
-y=82
-w=80
-h=80
-r=40
-color={sun}
-
-[p1]
-type=fill
-x=204
-y=104
-w=92
-h=2
-color={sky}
-
-[p2]
-type=fill
-x=204
-y=112
-w=92
-h=3
-color={sky}
-
-[p3]
-type=fill
-x=204
-y=121
-w=92
-h=4
-color={sky}
-
-# ---------------------------------------------------------------- city
-[b1]
-type=fill
-x=162
-y=92
-w=22
-h=58
-color={bldg2}
-
-[b2]
-type=fill
-x=184
-y=72
-w=16
-h=78
-color={bldg}
-
-[b3]
-type=fill
-x=200
-y=106
-w=24
-h=44
-color={bldg2}
-
-[b4]
-type=fill
-x=224
-y=120
-w=18
-h=30
-color={bldg}
-
-[b5]
-type=fill
+# ---------------------------------------------------------------- city life
+[ho]
+type=image
+file="img/holo_" + mod(t / 160, 4) + ".565"
 x=242
-y=110
-w=16
-h=40
-color={bldg2}
+y=30
+w=26
+h=44
+dyn=1
 
-[b6]
-type=fill
-x=258
-y=86
-w=22
-h=64
-color={bldg}
-
-[b7]
-type=fill
-x=280
-y=114
-w=16
-h=36
-color={bldg2}
-
-[b8]
-type=fill
-x=296
-y=68
-w=24
-h=82
-color={bldg}
-
-[e1]
-type=fill
-x=257
-y=86
-w=1
-h=64
-color={rim}
-
-[e2]
-type=fill
-x=241
-y=110
-w=1
-h=40
-color={rim}
-
-[w1]
-type=dots
-x=165
-y=96
-w=17
-h=52
-sx=4
-sy=5
-dw=2
-density=45
-seed=11
-color={win_y}
-
-[w2]
-type=dots
-x=187
-y=76
-w=12
-h=72
-sx=4
-sy=6
-dw=2
-density=40
-seed=12
-blink=5000
-color={win_c}
-
-[w3]
-type=dots
-x=203
-y=110
-w=19
-h=38
-sx=5
-sy=5
-dw=2
-density=50
-seed=13
-color={win_p}
-
-[w4]
-type=dots
-x=227
-y=124
-w=14
+[sa1]
+type=image
+file="img/city.565"
+x=195
+y=69
+w=13
 h=24
-sx=4
-sy=5
-dw=2
-density=40
-seed=14
+sx=195
+sy=69
+sw=320
+visible=sa
+dyn=1
+
+[sa0]
+type=image
+file="img/signs_off.565"
+x=195
+y=69
+w=13
+h=24
+sx=0
+sy=0
+sw=55
+visible=(sa == 0)
+dyn=1
+
+[sb1]
+type=image
+file="img/city.565"
+x=295
+y=73
+w=13
+h=24
+sx=295
+sy=73
+sw=320
+visible=sb
+dyn=1
+
+[sb0]
+type=image
+file="img/signs_off.565"
+x=295
+y=73
+w=13
+h=24
+sx=0
+sy=24
+sw=55
+visible=(sb == 0)
+dyn=1
+
+[sc1]
+type=image
+file="img/city.565"
+x=262
+y=104
+w=55
+h=11
+sx=262
+sy=104
+sw=320
+visible=sc
+dyn=1
+
+[sc0]
+type=image
+file="img/signs_off.565"
+x=262
+y=104
+w=55
+h=11
+sx=0
+sy=48
+sw=55
+visible=(sc == 0)
+dyn=1
+
+# bridge traffic: restore the deck, then slide headlights / tail lights
+[br]
+type=image
+file="img/city.565"
+x=150
+y=135
+w=170
+h=3
+sx=150
+sy=135
+sw=320
+dyn=1
+
+[hl]
+type=dots
+x=150 + mod(t / 25, 24)
+y=135
+w=146
+h=1
+sx=24
+dw=4
+dh=1
+density=55
+seed=5
 color={win_y}
+dyn=1
 
-[w5]
+[tl]
 type=dots
-x=245
-y=114
-w=12
-h=34
-sx=4
-sy=6
-dw=2
-density=45
-seed=15
-color={win_c}
-
-[w6]
-type=dots
-x=261
-y=90
-w=18
-h=58
-sx=4
-sy=5
-dw=2
-density=45
-seed=16
-blink=7000
-color={win_y}
-
-[w7]
-type=dots
-x=283
-y=118
-w=12
-h=30
-sx=4
-sy=5
-dw=2
+x=174 - mod(t / 35, 24)
+y=137
+w=146
+h=1
+sx=24
+dw=3
+dh=1
 density=50
-seed=17
-color={win_p}
-
-[w8]
-type=dots
-x=299
-y=72
-w=20
-h=76
-sx=4
-sy=6
-dw=2
-density=42
-seed=18
-color={win_c}
-
-[n1]
-type=quad
-x=203
-y=118
-w=18
-h=8
-lw=1
-line={red}
-
-[a1]
-type=fill
-x=191
-y=58
-w=1
-h=14
-color={dim}
-
-[a2]
-type=fill
-x=307
-y=54
-w=1
-h=14
-color={dim}
-
-[k1]
-type=fill
-x=190
-y=56
-w=3
-h=3
-color=al
-
-[k2]
-type=fill
-x=306
-y=52
-w=3
-h=3
-color=al
-
-# ---------------------------------------------------------------- street
-[g]
-type=fill
-x=160
-y=150
-w=160
-h=20
-color={street}
-
-[gl2]
-type=fill
-x=160
-y=150
-w=160
-h=1
-color={cyan}
-
-[d1]
-type=dots
-x=164
-y=158
-w=156
-h=1
-sx=16
-dw=9
-dh=1
-density=100
-color={cyan_dk}
-
-[d2]
-type=dots
-x=172
-y=164
-w=148
-h=1
-sx=22
-dw=6
-dh=1
-density=100
-color={tag_dim}
+seed=9
+color={tag}
+dyn=1

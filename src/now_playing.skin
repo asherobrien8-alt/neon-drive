@@ -8,14 +8,13 @@ dyn2=0,106,319,143
 dyn3=0,144,319,169
 
 [vars]
-tx=10 + (volume + 60) * 284 / 60
+tx=10 + vol_lv * 284 / 80
 fl=(tx < rx ? 1 : (tx > rx ? 0 : fl))
 mv=(tx != rx)
 lt=(mv ? t : lt)
 rx=(abs(tx - rx) > 320 ? tx : rx + clamp(tx - rx, -6, 6))
 rn=(t - lt < 450)
 fr=(rn ? mod(t, 220) < 110 : 1)
-lv=volume + 60
 
 [bg]
 type=fill
@@ -105,7 +104,7 @@ color={dim}
 type=roundrect
 x=8
 y=86
-w=92
+w=136
 h=14
 r=2
 color={cyan}
@@ -114,21 +113,21 @@ color={cyan}
 type=fill
 x=9
 y=87
-w=90
+w=134
 h=12
 color={navy}
 
 [fmt]
 type=text
-x=54
+x=76
 y=89
-text=(bits > 0 ? bits + "BIT " + (rate / 1000) + "K" : "AUDIO")
+text=(bits > 0 ? bits + "/" + (rate / 1000) + "K" : "AUDIO") + (kbps > 0 ? " " + kbps + "KBPS" : "")
 align=center
 color={cyan}
 
 [hr]
 type=text
-x=106
+x=150
 y=89
 text="HI-RES"
 color={lime}
@@ -271,8 +270,8 @@ x=10
 y=136
 w=300
 h=3
-value=lv
-max=60
+value=vol_lv
+max=80
 color={cyan}
 bg={faint}
 dyn=1
@@ -281,7 +280,7 @@ dyn=1
 type=text
 x=10
 y=110
-text="VOL " + lv
+text="VOL " + vol_lv
 color=(rn ? {lime} : {dim})
 dyn=1
 

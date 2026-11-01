@@ -2,8 +2,14 @@
 
 A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 
-- **Live home screen.** Five slanted neon tags (File Browser, Media Library, Playing, Music Settings, System Settings). The selected one glows red and flickers like a real neon tube. Next to them is a night city with lit windows, blinking antenna lights, twinkling stars and a striped sun that glows, with rings radiating out from it.
-- **Volume runner.** On Now Playing, a glowing runner stands on the volume track. Turn it up and he sprints right; turn it down and he sprints left.
+- **Night-city home screen.** A painted cyberpunk skyline (Tokyo / Bangkok / Chongqing vibes: towers, kanji neon, a hologram billboard, a river and a bridge full of traffic) next to Cyberpunk-style slanted menu tags. The selected tag glitches and flickers like a dying neon tube, signs stutter on and off, the hologram loops and headlights slide across the bridge.
+- **Boot animation.** A Japanese alley shop: the roll-up shutter lifts, the 電源オン ("power on") neon sign flickers to life, and a neon loading bar fills.
+- **Power-off animation.** Hold POWER: a glitchy "virus" eats the screen diagonally from the top-right to the bottom-left in 3 seconds, then the player switches off.
+- **Playlists.** Library → Playlists. Every song exists once; playlists just point at it (like an iPod). Uses normal `.m3u8` files in a `Playlists` folder.
+- **More EQ.** Bass Boost, Bass Max, Vocal Boost, Treble Boost, Loudness, Synthwave and Late Night presets, plus a simple 10-slider custom EQ.
+- **Faster and smoother.** Screens open much faster (the library check and file seeking were rewritten) and the animations step aside when the music needs the CPU, so playback no longer chops.
+- **Bitrate on Now Playing.** `24/96K 1411KBPS` next to the sample rate.
+- **Volume runner.** On Now Playing, a glowing runner stands on the volume track. Turn it up and he sprints right; turn it down and he sprints left. He now stays on screen across the whole volume range.
 - **Cyber settings.** Terminal-style `SYS://CONFIG` screen.
 - **Search.** Library → Search: spin letters with VOL, add with PLAY, and matches (title, artist or album) show up live as you type.
 - **A-Z jump.** In any long list (Artists, Albums, All Songs, search results), **hold PLAY** for a letter grid and jump straight to that letter.
@@ -15,6 +21,8 @@ A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 | Home (live) | Volume runner |
 |---|---|
 | ![home](docs/preview/home_live_wallpaper.gif) | ![runner](docs/preview/now_playing_volume_runner.gif) |
+| **Boot** | **Power off (hold POWER)** |
+| ![boot](docs/preview/boot.gif) | ![off](docs/preview/power_off.gif) |
 | **Search** | **A-Z jump (hold PLAY)** |
 | ![search](docs/preview/search.png) | ![a-z](docs/preview/az.png) |
 
@@ -34,8 +42,8 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 |---|---|---|
 | FLAC, MP3, WAV | ✅ | ✅ |
 | M4A/AAC, OGG, APE, DSD | ✅ | ❌ not yet |
-| Bluetooth | ✅ | ❌ not yet |
-| USB DAC mode | ✅ | ❌ |
+| Bluetooth headphones | ✅ | ✅ (new in ReChord, still early) |
+| USB DAC mode | ✅ | 🟡 early |
 | 96 kHz files | ✅ | ✅ (rare crackle) |
 | Copy music over USB | ✅ | ✅ internal storage (SD card is read-only over USB; use a card reader) |
 | Themes / live wallpaper / runner | ❌ | ✅ |
@@ -67,7 +75,7 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 
 **Step 3: first boot**
 
-1. On the home screen pick **SYSTEM SETTINGS → Rebuild index** so the library finds your songs (do this again whenever you add music).
+1. On the home screen pick **SYSTEM → Rebuild library** so the library finds your songs (do this again whenever you add music or playlists).
 2. Put the microSD card back.
 
 ### Controls
@@ -81,6 +89,11 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 | MENU button | quick settings (shuffle, repeat, playlist) |
 | BACK on the home screen | classic menu: Files, USB storage, System |
 | Power, short press | screen off / on |
+| Power, hold | power-off animation, then off |
+
+### Playlists
+
+Put playlist files (`.m3u` or `.m3u8`, the kind iTunes, MusicBee, foobar2000 or VLC export) in a folder called **`Playlists`** at the top of the player (or of the SD card). Songs are matched to the copies already in `Music`, so nothing is duplicated. Then **SYSTEM → Rebuild library** and they show up under **Library → Playlists**. Hold PLAY on a song inside an album or playlist to add it to Favorites.
 
 ### Going back to stock
 
@@ -105,6 +118,7 @@ It writes `LowBitrate-Report.html` and a `.csv` to your Desktop: every song unde
 src/                 theme sources (readable colours + comments)
 tools/build_theme.py compiles src/ -> STEP-2-THEME/ and checks every ReChord limit
 tools/make_assets.py the pixel-art sprites (car, palm, runner) -> 1-bit assets
+art/build_art.py     paints the city + boot scenes -> img/*.565 (raw RGB565)
 tools/previews.sh    re-renders docs/preview with the real engine
 firmware/build.sh    rebuilds HIFIEC90.IMG: ReChord @ pinned commit + neon-drive-engine.patch
 simulator/build.sh   rebuilds simulator/index.html (needs `pip install ziglang==0.13.0`, node)
@@ -112,9 +126,14 @@ simulator/build.sh   rebuilds simulator/index.html (needs `pip install ziglang==
 
 The firmware patch (`firmware/neon-drive-engine.patch`) adds to ReChord:
 
-- **Search** (`search_screen.c`, `mq_search_init`) and **A-Z jump** (`az_screen.c`, `mq_initial_*`), with new host tests in `services/tests/test_search_az.c`.
+- **Search** (`search_screen.c`, `mq_search_init`), **A-Z jump** (`az_screen.c`, `mq_initial_*`) and **playlists** (`mq_playlists_init`, `mq_playlist_init`), with host tests in `services/tests/test_search_az.c`.
+- **Speed:** `fs_seek` no longer restarts the FAT cluster walk (seeks were quadratic), and the library index is verified once per mount instead of on every screen.
+- **Smooth audio:** skins pump the Core B file ring while drawing, and animation frames are throttled/skipped while the ring is low.
+- **Boot / power-off animations** (`startup/neon_fx.c`) streamed from the theme's `img/` folder.
+- **Images in skins:** an `image` meter that streams raw RGB565 from the theme folder (no RAM), plus up to 6 partial-refresh regions.
+- **EQ:** 7 new presets and a 10-slider graphic EQ screen; styled compiled menus.
 - **Theme engine extras:** 2×/3× text, transparent text and sprites, mirrored sprites, colourable list selection bars, a `menu` home button, and the real battery level for skins (upstream always passed "unknown").
 
-Themes that don't use the extras render exactly as before, and all of ReChord's test suites (UI, theme, services) pass with the patch. The image adds about 5 KB of code and 112 bytes of RAM, still under ReChord's RAM ceiling.
+Themes that don't use the extras render exactly as before, and all of ReChord's test suites (UI, theme, services) pass with the patch. RAM use stays under ReChord's ceiling.
 
 All art is original. ReChord is by [brnomt](https://github.com/brnomt/FiioDcomp). This project isn't affiliated with FiiO or Snowsky.

@@ -4,12 +4,13 @@
 # ReChord (https://github.com/brnomt/FiioDcomp) at a pinned commit + the
 # Neon Drive patch: theme engine extras (scaled/transparent text, styled
 # lists, transparent/mirrored sprites, "menu" home action, battery in skins)
-# plus two new features: Search and A-Z jump. Linux/macOS/WSL:
+# plus Search, A-Z jump, playlists, faster loading, smoother playback,
+# extra EQ presets and the boot / power-off animations. Linux/macOS/WSL:
 #
 #   sudo apt install gcc-arm-none-eabi python3 git make
 #   sh firmware/build.sh
 set -e
-BASE=6bd3a2e5dd66757fb6edc675af2450ec03fa248d
+BASE=70ae40faf22e001211b2647c6fdaedf0a9128ffb
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK="$HERE/.rechord-src"
 

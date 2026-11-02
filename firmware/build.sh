@@ -11,7 +11,7 @@
 #   sudo apt install gcc-arm-none-eabi python3 git make
 #   sh firmware/build.sh
 set -e
-BASE=70ae40faf22e001211b2647c6fdaedf0a9128ffb
+BASE=703b23f300cdd059381bb9fd592c3d0ae3e6fede
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK="$HERE/.rechord-src"
 

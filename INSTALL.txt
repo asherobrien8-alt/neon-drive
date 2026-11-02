@@ -14,7 +14,7 @@ STEP 1 - FIRMWARE
     at the very top level (NOT inside any folder).
  3. In Windows, right-click the player's drive and choose Eject. Unplug it.
  4. Restart the player. It installs by itself. Wait until it boots up.
- 5. Check it took: SYSTEM -> Firmware must say "Neon Drive 3".
+ 5. Check it took: SYSTEM -> Firmware must say "Neon Drive 4".
     Do STEP 1 again for every new version - the theme alone is not enough.
 
 STEP 2 - THEME
@@ -34,7 +34,7 @@ CONTROLS
  hold PLAY        A-Z jump in any long list (artists, albums, songs)
  BACK             go back (on the home screen: the full menu)
  MENU             quick settings (shuffle, repeat, cover art, sleep timer)
- hold POWER       power-off animation, then off
+ hold POWER       switch on (a quick tap does nothing) / power-off animation, then off
  Search           MUSIC -> Search. VOL picks a letter, PLAY adds it,
                   BACK deletes, hold PLAY for the results.
 
@@ -45,6 +45,15 @@ PLAYLISTS
  MUSIC -> Playlists, together with Favorites and every music folder on the
  SD card (each folder is its own playlist automatically).
  Hold PLAY on a song inside an album or playlist to add it to Favorites.
+
+COPYING MUSIC OVER USB
+ Copy music to the player's own storage ("Internal"). Over USB the SD card
+ is READ-ONLY (that is the "remove the write protection" message): to put
+ music on the SD card, use a card reader in the PC.
+
+COVER ART
+ Run cover-art-maker\Make Cover Art.bat once with the player plugged in
+ (needs Python 3), then on the player: MENU -> Cover art -> on.
 
 PLAYS: FLAC, MP3, WAV.  NOT YET: M4A/AAC, OGG, APE, DSD.
 Bluetooth headphones work too (still early).

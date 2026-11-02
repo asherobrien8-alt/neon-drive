@@ -36,7 +36,7 @@ index a1dd853..1b417eb 100644
  $(BB_CORE_BIN): $(BB_CORE_ELF)
  	$(OBJCOPY) -O binary $< $@
 diff --git a/firmware/ap.mk b/firmware/ap.mk
-index 120dc94..bac551e 100644
+index b5e086d..4d76e86 100644
 --- a/firmware/ap.mk
 +++ b/firmware/ap.mk
 @@ -78,6 +78,7 @@ AP_STARTUP_SRCS := \
@@ -56,6 +56,36 @@ index 120dc94..bac551e 100644
    firmware/ui/screens/skin_screen.c \
    firmware/ui/screens/quick_screen.c \
    firmware/ui/screens/eq_screen.c \
+diff --git a/firmware/audio/audio_output.c b/firmware/audio/audio_output.c
+index 341caf7..5fa76ba 100644
+--- a/firmware/audio/audio_output.c
++++ b/firmware/audio/audio_output.c
+@@ -408,6 +408,12 @@ void audio_output_fade_in(void)
+ /* Unmute without the user fade (track changes): write the target level
+  * directly. PCM_SZC (0x090003 = 0xEC) soft-ramps the register step, the same
+  * way the stock's fade-off path unmuted. */
++/* Neon Drive: 1 while the DAC sits at the silent level (pause/stop mute). */
++int audio_output_muted(void)
++{
++    return s_dac_ready && s_volume_atten == 0xFF;
++}
++
+ void audio_output_unmute(void)
+ {
+     uint8_t target;
+diff --git a/firmware/audio/audio_output.h b/firmware/audio/audio_output.h
+index 5ea9bb5..6d8d84e 100644
+--- a/firmware/audio/audio_output.h
++++ b/firmware/audio/audio_output.h
+@@ -79,6 +79,8 @@ void audio_output_fade_in(void);
+  * `fade_ms` of it); the DAC's PCM_SZC soft ramp smooths the step. No-op when
+  * the DAC is not up. */
+ void audio_output_unmute(void);
++/* Neon Drive: DAC held at the silent level (pause / stop mute). */
++int  audio_output_muted(void);
+ /* Stop/track-change mute with the stock fixed ramp (not the user fade). */
+ void audio_output_quick_mute(void);
+ 
 diff --git a/firmware/bb/bb_main.c b/firmware/bb/bb_main.c
 index 9148526..4110529 100644
 --- a/firmware/bb/bb_main.c
@@ -80,112 +110,27 @@ index 9148526..4110529 100644
          handle_command();
  
 diff --git a/firmware/drivers/battery.c b/firmware/drivers/battery.c
-index 666c48a..994c24f 100644
+index 9d7bad4..154e1a6 100644
 --- a/firmware/drivers/battery.c
 +++ b/firmware/drivers/battery.c
-@@ -19,6 +19,8 @@
- 
- static int s_mv = -1;
- static int s_level = -1;
-+static int s_pct = -1;      /* smoothed percentage (Neon Drive) */
-+static int s_charging;      /* USB power present (set by the app loop) */
- 
- int battery_level_from_mv(int mv)
- {
-@@ -35,11 +37,33 @@ int battery_level_from_mv(int mv)
-     return BATTERY_LEVELS - 1;
- }
- 
-+/* Neon Drive: a real percentage. The 5-step stock levels made the home
-+ * screen jump 100 -> 75 -> 50 (anything >= 3.80 V read "100%"). This is a
-+ * typical single-cell Li-ion discharge curve under a light load, linearly
-+ * interpolated; the levels above stay for icons. */
-+static const short k_curve[][2] = {
-+    { 3350, 0 }, { 3500, 3 }, { 3600, 8 }, { 3680, 15 }, { 3720, 22 },
-+    { 3750, 30 }, { 3780, 40 }, { 3820, 50 }, { 3870, 60 }, { 3930, 70 },
-+    { 3990, 80 }, { 4060, 90 }, { 4150, 100 },
-+};
-+
- int battery_pct_from_mv(int mv)
- {
--    int level = battery_level_from_mv(mv);
-+    int i, n = (int)(sizeof k_curve / sizeof k_curve[0]);
-+
-+    if (mv < 0)
-+        return -1;
-+    if (mv <= k_curve[0][0])
-+        return 0;
-+    for (i = 1; i < n; i++) {
-+        if (mv < k_curve[i][0]) {
-+            int x0 = k_curve[i - 1][0], y0 = k_curve[i - 1][1];
-+            int x1 = k_curve[i][0], y1 = k_curve[i][1];
- 
--    return level < 0 ? -1 : level * 100 / (BATTERY_LEVELS - 1);
-+            return y0 + (mv - x0) * (y1 - y0) / (x1 - x0);
-+        }
-+    }
-+    return 100;
- }
- 
- /* One conversion -> millivolts, mirroring RealBattValue(). */
-@@ -73,8 +97,21 @@ void battery_poll(void)
-     }
-     s_mv = sum / n;
-     s_level = battery_level_from_mv(s_mv);
-+    {
-+        /* Smooth the shown value: the ADC and the load (DAC, backlight)
-+         * wobble the voltage by tens of mV. Big moves (charger in/out) are
-+         * taken at once, small ones a quarter at a time. */
-+        int p = battery_pct_from_mv(s_mv);
-+
-+        if (s_pct < 0 || p - s_pct > 15 || s_pct - p > 15)
-+            s_pct = p;
-+        else
-+            s_pct += (p - s_pct + (p > s_pct ? 3 : -3)) / 4;
-+    }
- }
- 
+@@ -120,3 +120,5 @@ void battery_poll(void)
  int battery_mv(void)      { return s_mv; }
  int battery_level(void)   { return s_level; }
--int battery_percent(void) { return s_level < 0 ? -1 : s_level * 25; }
-+int battery_percent(void) { return s_level < 0 ? -1 : s_pct; }
-+void battery_set_charging(int on) { s_charging = on ? 1 : 0; }
-+int battery_charging(void) { return s_charging; }
+ int battery_percent(void) { return s_pct; }
++
++int battery_charging(void) { return s_charging; }   /* Neon Drive: skins */
 diff --git a/firmware/drivers/battery.h b/firmware/drivers/battery.h
-index 6606920..743cf92 100644
+index fbd079d..1111e04 100644
 --- a/firmware/drivers/battery.h
 +++ b/firmware/drivers/battery.h
-@@ -30,5 +30,8 @@ void battery_poll(void);
- int battery_mv(void);
- int battery_level(void);
- int battery_percent(void);
-+/* Neon Drive: USB power present (the app loop feeds usb_cable()). */
-+void battery_set_charging(int on);
-+int battery_charging(void);
+@@ -28,6 +28,7 @@ int battery_pct_from_mv(int mv);
+ /* Tell the gauge whether the charger is connected (compensates the reading).
+  * Call before battery_poll(). */
+ void battery_set_charging(int on);
++int battery_charging(void);        /* Neon Drive: the last value set */
  
- #endif /* RECHORD_DRIVERS_BATTERY_H */
-diff --git a/firmware/drivers/tests/test_battery.c b/firmware/drivers/tests/test_battery.c
-index b7d0aec..1c1cf82 100644
---- a/firmware/drivers/tests/test_battery.c
-+++ b/firmware/drivers/tests/test_battery.c
-@@ -37,11 +37,13 @@ int main(void)
-     CHECK(battery_level_from_mv(4100) == 4);
-     CHECK(battery_level_from_mv(-1) == -1);
- 
-+    /* Neon Drive: interpolated Li-ion curve instead of 5 steps */
-     CHECK(battery_pct_from_mv(3300) == 0);
--    CHECK(battery_pct_from_mv(3350) == 25);
--    CHECK(battery_pct_from_mv(3500) == 50);
--    CHECK(battery_pct_from_mv(3600) == 75);
--    CHECK(battery_pct_from_mv(4000) == 100);
-+    CHECK(battery_pct_from_mv(3350) == 0);
-+    CHECK(battery_pct_from_mv(3820) == 50);
-+    CHECK(battery_pct_from_mv(3845) == 55);
-+    CHECK(battery_pct_from_mv(4150) == 100);
-+    CHECK(battery_pct_from_mv(4300) == 100);
-     CHECK(battery_pct_from_mv(-1) == -1);
- 
-     /* Sim backend: channel 0 is unavailable -> the gauge stays unknown and the
+ /* One measurement step (what battery_poll does after reading the ADC): apply
+  * the charge offset, smooth, and update the cached values. Exposed for tests. */
 diff --git a/firmware/player/codecs/libmad/COPYING b/firmware/player/codecs/libmad/COPYING
 new file mode 100644
 index 0000000..d60c31a
@@ -20052,7 +19997,7 @@ index 0000000..d215d4c
 +
 +# endif
 diff --git a/firmware/player/codecs/mp3.c b/firmware/player/codecs/mp3.c
-index 82a83ae..32eaef0 100644
+index 82a83ae..1a171b3 100644
 --- a/firmware/player/codecs/mp3.c
 +++ b/firmware/player/codecs/mp3.c
 @@ -30,9 +30,14 @@
@@ -20099,6 +20044,130 @@ index 82a83ae..32eaef0 100644
          if (s_win_pos >= s_win_len) {
              long r;
  
+@@ -348,6 +375,33 @@ static void reset_feed(mp3_state_t *st)
+ #endif
+ }
+ 
++/* Neon Drive: probe window slide. Keeps the last 1450 bytes (a whole frame
++ * plus the next header) from *off on, refills the rest, and moves tag_end
++ * so the audio start stays an absolute file offset. 0 = more data read. */
++static int probe_slide(mp3_state_t *st, int *off)
++{
++    int keep_from = s_win_len - 1450;
++    long r;
++
++    if (keep_from < *off)
++        keep_from = *off;
++    if (keep_from <= 0)
++        keep_from = s_win_len > 4 ? s_win_len - 4 : 0;
++    memmove(s_win, s_win + keep_from, (size_t)(s_win_len - keep_from));
++    s_win_len -= keep_from;
++    st->tag_end += keep_from;
++    *off = 0;
++    r = cio_read(st->io, s_win + s_win_len, (long)(MP3_WIN_BYTES - s_win_len));
++    if (r <= 0) {
++        s_win_eof = 1;
++        return -1;
++    }
++    if (r < (long)(MP3_WIN_BYTES - s_win_len))
++        s_win_eof = 1;
++    s_win_len += (int)r;
++    return 0;
++}
++
+ /* ---- codec_t callbacks -------------------------------------------------- */
+ 
+ static int mp3_open(void *vst, const char *path)
+@@ -397,16 +451,25 @@ static int mp3_open(void *vst, const char *path)
+     st->duration_ms = -1;
+ 
+     /* ID3v2: skip it for audio, scan it for ReplayGain. */
+-    if (cio_read(st->io, hdr, 10) == 10 &&
++    r = cio_read(st->io, hdr, 10);
++    /* Neon Drive: "MP3s" from web converters are sometimes MP4/M4A (AAC)
++     * or WebM files renamed: say so instead of a generic format error. */
++    if (r == 10 && ((hdr[4] == 'f' && hdr[5] == 't' && hdr[6] == 'y' &&
++                     hdr[7] == 'p') ||
++                    (hdr[0] == 0x1A && hdr[1] == 0x45 && hdr[2] == 0xDF))) {
++        cio_close(st->io);
++        st->io = 0;
++        rc = CODEC_ERR_UNSUPPORTED;
++        goto fail;
++    }
++    if (r == 10 &&
++        hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3' &&
++        (hdr[6] & 0x80 || hdr[7] & 0x80 || hdr[8] & 0x80 || hdr[9] & 0x80)) {
++        hdr[0] = 0;                  /* broken tag size: scan for audio */
++    }
++    if (r == 10 &&
+         hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+         unsigned sz;
+-        if (hdr[6] & 0x80 || hdr[7] & 0x80 ||
+-            hdr[8] & 0x80 || hdr[9] & 0x80) {
+-            cio_close(st->io);
+-            st->io = 0;
+-            rc = CODEC_ERR_FORMAT;   /* not a synchsafe size */
+-            goto fail;
+-        }
+         sz = ((unsigned)(hdr[6] & 0x7F) << 21) |
+              ((unsigned)(hdr[7] & 0x7F) << 14) |
+              ((unsigned)(hdr[8] & 0x7F) << 7) |
+@@ -447,15 +510,22 @@ static int mp3_open(void *vst, const char *path)
+ 
+ #ifndef RECHORD_AP_METADATA_ONLY
+     mp3dec_init(&st->dec);
+-    for (i = 0; i < 9 && n <= 0; i++) {
+-        memset(&fi, 0, sizeof fi);
+-        n = mp3dec_decode_frame(&st->dec, s_win + off,
+-                                s_win_len - off, NULL, &fi);
+-        if (n <= 0) {
+-            off += (fi.frame_bytes > 0) ? fi.frame_bytes : 1;
+-            if (off >= s_win_len)
++    /* Neon Drive: look up to ~64 KB in (junk, padding, a second tag before
++     * the first frame), sliding the window; the old probe gave up after
++     * 9 tries inside the first 2.5 KB. */
++    for (i = 0; i < 64 && n <= 0; i++) {
++        while (off < s_win_len - 4) {
++            memset(&fi, 0, sizeof fi);
++            n = mp3dec_decode_frame(&st->dec, s_win + off,
++                                    s_win_len - off, NULL, &fi);
++            if (n > 0)
+                 break;
++            if (s_win_len - off < 1450 && !s_win_eof)
++                break;                  /* maybe a frame cut by the window */
++            off += (fi.frame_bytes > 0) ? fi.frame_bytes : 1;
+         }
++        if (n > 0 || s_win_eof || probe_slide(st, &off) != 0)
++            break;
+     }
+     if (n <= 0 || fi.hz == 0 || fi.channels == 0 ||
+         fi.channels > MP3_MAX_CH || fi.layer != 3) {
+@@ -483,12 +553,21 @@ static int mp3_open(void *vst, const char *path)
+     {
+         int hz = 0, ch = 0, br = 0, spf = 0, flen = 0;
+ 
+-        for (i = 0; i < s_win_len - 4; i++) {
+-            if (mp3_frame_info(s_win + i, s_win_len - i, &hz, &ch, &br,
+-                               &spf, &flen) == 0)
++        int k, found = 0;
++
++        i = 0;
++        for (k = 0; k < 64 && !found; k++) {     /* Neon Drive: ~64 KB */
++            for (; i < s_win_len - 4; i++) {
++                if (mp3_frame_info(s_win + i, s_win_len - i, &hz, &ch, &br,
++                                   &spf, &flen) == 0) {
++                    found = 1;
++                    break;
++                }
++            }
++            if (found || s_win_eof || probe_slide(st, &i) != 0)
+                 break;
+         }
+-        if (i >= s_win_len - 4) {
++        if (!found) {
+             cio_close(st->io);
+             st->io = 0;
+             rc = CODEC_ERR_FORMAT;
 diff --git a/firmware/player/codecs/mp3_mad.c b/firmware/player/codecs/mp3_mad.c
 new file mode 100644
 index 0000000..cb3ecc2
@@ -20455,7 +20524,7 @@ index 0000000..f12ea62
 +
 +#endif
 diff --git a/firmware/player/player.c b/firmware/player/player.c
-index 17a7ed3..cdd3ff4 100644
+index cb07245..aa1f3e2 100644
 --- a/firmware/player/player.c
 +++ b/firmware/player/player.c
 @@ -28,7 +28,7 @@
@@ -20467,6 +20536,21 @@ index 17a7ed3..cdd3ff4 100644
  
  typedef struct
  {
+@@ -1160,10 +1160,11 @@ int player_load_list(const uint16_t *idx, int n, int start)
+      * BEFORE this call so AUTO can already resolve the first track. */
+     rg_set_prev_album(0);
+     rc = open_track(path);          /* leaves the player STOPPED */
+-    if (rc != PLAYER_OK)
+-        return rc;
++    /* Neon Drive: keep the new list even when its first song will not
++     * open, so the app can retry it / move on to the next one instead of
++     * acting on the previous list. */
+     playlist_load(&g.list, idx, n, start);
+-    return PLAYER_OK;
++    return rc;
+ }
+ 
+ int player_play_list(const uint16_t *idx, int n, int start)
 diff --git a/firmware/player/tests/fixture_mp3_sine.h b/firmware/player/tests/fixture_mp3_sine.h
 new file mode 100644
 index 0000000..d1fa79e
@@ -21085,10 +21169,10 @@ index 0000000..5499dc9
 +    return 0;
 +}
 diff --git a/firmware/player/tests/test_player_state.c b/firmware/player/tests/test_player_state.c
-index f1cdb56..dddfe4c 100644
+index c0748c2..d42641f 100644
 --- a/firmware/player/tests/test_player_state.c
 +++ b/firmware/player/tests/test_player_state.c
-@@ -264,7 +264,7 @@ int main(void)
+@@ -273,7 +273,7 @@ int main(void)
      CHECK_EQI(player_set_volume(-100), PLAYER_OK, "under-range clamps");
      CHECK_EQI(player_get_volume(), -60, "clamped to -60 dB");
      CHECK_EQI(player_set_volume(99), PLAYER_OK, "over-range clamps");
@@ -21166,56 +21250,25 @@ index 5051887..3eaf2b0 100644
 +
  #endif /* RECHORD_SERVICES_ART_PACK_H */
 diff --git a/firmware/services/eq_profile.c b/firmware/services/eq_profile.c
-index 9376c6b..93712f4 100644
+index 9277ecc..c7a4f75 100644
 --- a/firmware/services/eq_profile.c
 +++ b/firmware/services/eq_profile.c
-@@ -13,7 +13,7 @@
- #include "fs.h"
- #include "rechord_files.h"
- 
--#define EQ_BUILTIN_COUNT 5
-+#define EQ_BUILTIN_COUNT 12
- #define EQ_TEXT_MAX      512
- 
- /* ISO 10-band centre frequencies (Hz). */
-@@ -28,13 +28,27 @@ static const int8_t s_builtin_gain[EQ_BUILTIN_COUNT][EQ_BANDS_MAX] = {
-     /* Rock  */ { 40, 30, 10, -10, -20, -10, 10, 30, 40, 30 },
-     /* Jazz  */ { 30, 20, 10, 20, -10, -10, 0, 10, 20, 20 },
-     /* EDM   */ { 50, 40, 20, 0, -10, -10, 0, 10, 20, 20 },
--    /* Vocal */ { -20, -10, 0, 10, 30, 30, 20, 10, 0, -10 }
-+    /* Vocal */ { -20, -10, 0, 10, 30, 30, 20, 10, 0, -10 },
-+    /* Neon Drive presets (tenths of dB; 31/62/125/250/500/1k/2k/4k/8k/16k) */
-+    /* Bass Boost   */ { 60, 55, 40, 15, 0, 0, 0, 0, 0, 0 },
-+    /* Bass Max     */ { 90, 80, 55, 20, -10, 0, 0, 0, 10, 10 },
-+    /* Vocal Boost  */ { -20, -15, -10, 0, 20, 40, 45, 30, 10, 0 },
-+    /* Treble Boost */ { 0, 0, 0, 0, 0, 0, 10, 30, 50, 60 },
-+    /* Loudness     */ { 50, 40, 15, 0, -10, -10, 0, 15, 35, 40 },
-+    /* Synthwave    */ { 45, 40, 20, -5, -15, -5, 10, 25, 35, 30 },
-+    /* Late Night   */ { -10, 0, 10, 15, 20, 20, 10, 0, -15, -25 },
- };
- 
--static const char s_builtin_name[EQ_BUILTIN_COUNT][8] = {
--    "Flat", "Rock", "Jazz", "EDM", "Vocal"
-+static const char s_builtin_name[EQ_BUILTIN_COUNT][13] = {
-+    "Flat", "Rock", "Jazz", "EDM", "Vocal", "Bass Boost", "Bass Max",
-+    "Vocal Boost", "Treble Boost", "Loudness", "Synthwave", "Late Night"
- };
- 
-+int eq_profile_builtin_count(void)
+@@ -728,3 +728,8 @@ int eq_profile_format_gain(int gain_tdb, char *buf, unsigned cap)
+     buf[n] = '\0';
+     return (int)n;
+ }
++
++int eq_profile_builtin_count(void)   /* Neon Drive: the picker's split */
 +{
 +    return EQ_BUILTIN_COUNT;
 +}
-+
- /* ---- AP state (kept small: the AP .bss ceiling is the tight budget) ---- */
- static eq_curve_t s_active;
- static char       s_name[EQ_PROFILE_NAME_MAX];
 diff --git a/firmware/services/eq_profile.h b/firmware/services/eq_profile.h
-index 1615453..4d1c256 100644
+index 2045afd..7114db2 100644
 --- a/firmware/services/eq_profile.h
 +++ b/firmware/services/eq_profile.h
-@@ -48,6 +48,8 @@ int eq_profile_save(void);
+@@ -50,6 +50,8 @@ int eq_profile_save(void);
  
- /* Rows the picker shows: 5 built-ins followed by every present custom slot. */
+ /* Rows the picker shows: the built-ins followed by every present custom slot. */
  int eq_profile_count(void);
 +/* Number of built-in presets (they come first in the picker). */
 +int eq_profile_builtin_count(void);
@@ -21949,11 +22002,26 @@ index 2926dc9..0a4052d 100644
  /* Optional pump called every few index records while a query scans the index.
   * The scan is a long blocking loop of media_db_get() calls; without pumping,
   * the player stops refilling the PCM ring and an underrun cuts the audio (at
+diff --git a/firmware/services/power_save.h b/firmware/services/power_save.h
+index 56b93aa..e9c5d32 100644
+--- a/firmware/services/power_save.h
++++ b/firmware/services/power_save.h
+@@ -19,8 +19,8 @@
+ #ifndef RECHORD_SERVICES_POWER_SAVE_H
+ #define RECHORD_SERVICES_POWER_SAVE_H
+ 
+-#define POWER_SAVE_STOP_MS     3000UL
+-#define POWER_SAVE_PRELOAD_MS  60000UL
++#define POWER_SAVE_STOP_MS     60000UL   /* Neon Drive: was 3 s (fewer Core B restarts) */
++#define POWER_SAVE_PRELOAD_MS  600000UL  /* Neon Drive: was 1 min */
+ 
+ enum {
+     POWER_SAVE_DAC    = 1u << 0,   /* audio_output_power_off()          */
 diff --git a/firmware/services/tests/run_tests.sh b/firmware/services/tests/run_tests.sh
-index 32bd5fd..8e9e1dc 100644
+index 3e6cd48..7ea5504 100644
 --- a/firmware/services/tests/run_tests.sh
 +++ b/firmware/services/tests/run_tests.sh
-@@ -47,6 +47,8 @@ $CC $CFLAGS -I.. -I../.. -o .work/test_art_pack test_art_pack.c ../art_pack.c ..
+@@ -48,6 +48,8 @@ $CC $CFLAGS -I.. -I../.. -o .work/test_art_pack test_art_pack.c ../art_pack.c ..
  .work/test_scratch
  .work/test_media_db
  .work/test_media_query
@@ -21962,62 +22030,59 @@ index 32bd5fd..8e9e1dc 100644
  .work/test_media_scan
  .work/test_eq_profile
  .work/test_bt_proto
-diff --git a/firmware/services/tests/test_eq_profile.c b/firmware/services/tests/test_eq_profile.c
-index 973ee11..da6edd2 100644
---- a/firmware/services/tests/test_eq_profile.c
-+++ b/firmware/services/tests/test_eq_profile.c
-@@ -216,13 +216,13 @@ static void test_service(void)
-     pub_calls = 0;
-     eq_profile_set_publisher(recorder);
-     CHECK(eq_profile_boot() == 0, "boot");
--    CHECK(eq_profile_count() == 7, "5 built-ins + custom1 + custom2");
-+    CHECK(eq_profile_count() == 14, "12 built-ins + custom1 + custom2");
-     CHECK(eq_profile_enabled() == 0, "boot starts disabled");
-     CHECK(strcmp(eq_profile_name(), "Flat") == 0, "default profile name");
-     CHECK(pub_calls == 1, "boot publishes the curve");
+diff --git a/firmware/services/tests/test_power_save.c b/firmware/services/tests/test_power_save.c
+index 0461c9a..5e4a560 100644
+--- a/firmware/services/tests/test_power_save.c
++++ b/firmware/services/tests/test_power_save.c
+@@ -23,33 +23,35 @@ int main(void)
+ {
+     power_save_t ps;
  
--    CHECK(eq_profile_entry_is_custom(5) == 1, "row 5 is custom");
--    CHECK(strcmp(eq_profile_entry_name(5), "Rock") == 0,
-+    CHECK(eq_profile_entry_is_custom(12) == 1, "row 12 is custom");
-+    CHECK(strcmp(eq_profile_entry_name(12), "Rock") == 0,
-           "custom slot label comes from name=");
+-    TEST("power_save: three-second idle shutdown");
++    /* Neon Drive: STOP = 60 s, PRELOAD = 10 min (fewer Core B restarts). */
++    TEST("power_save: idle shutdown after POWER_SAVE_STOP_MS");
+     power_save_init(&ps);
  
-     CHECK(eq_profile_select(1) == 0, "select built-in Rock");
-@@ -252,7 +252,7 @@ static void test_service(void)
-     CHECK(pub_enabled == 1, "enable is published");
-     eq_profile_save();
+     CHECK_EQI(power_save_step(&ps, 0, 1, 0, 1000), 0,
+               "playing: nothing (timer disarmed)");
+     CHECK_EQI(power_save_step(&ps, 1, 1, 0, 2000), 0, "first idle pass arms");
+-    CHECK_EQI(power_save_step(&ps, 1, 1, 0, 4999), 0, "before 3 s: nothing");
+-    CHECK_EQI(power_save_step(&ps, 1, 1, 0, 5000),
+-              POWER_SAVE_DAC | POWER_SAVE_CORE_B, "3 s: DAC + Core B off");
++    CHECK_EQI(power_save_step(&ps, 1, 1, 0, 2000 + POWER_SAVE_STOP_MS - 1), 0,
++              "before STOP: nothing");
++    CHECK_EQI(power_save_step(&ps, 1, 1, 0, 2000 + POWER_SAVE_STOP_MS),
++              POWER_SAVE_DAC | POWER_SAVE_CORE_B, "STOP: DAC + Core B off");
  
--    CHECK(eq_profile_select(5) == 0, "select custom slot 1");
-+    CHECK(eq_profile_select(12) == 0, "select custom slot 1");
-     CHECK(eq_profile_curve()->band[8].gain_tdb == 40,
-           "custom file loaded");
+-    /* A boot preload keeps Core B for a minute, but the DAC still goes. */
++    /* A boot preload keeps Core B longer, but the DAC still goes. */
+     power_save_init(&ps);
+     power_save_step(&ps, 1, 1, 1, 1000);
+-    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 4000), POWER_SAVE_DAC,
+-              "preloaded: DAC only at 3 s");
+-    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 60999), POWER_SAVE_DAC,
+-              "preloaded: still DAC only before 60 s");
+-    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 61000),
+-              POWER_SAVE_DAC | POWER_SAVE_CORE_B, "preload expires at 60 s");
++    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 1000 + POWER_SAVE_STOP_MS),
++              POWER_SAVE_DAC, "preloaded: DAC only at STOP");
++    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 1000 + POWER_SAVE_PRELOAD_MS - 1),
++              POWER_SAVE_DAC, "preloaded: still DAC only before PRELOAD");
++    CHECK_EQI(power_save_step(&ps, 1, 1, 1, 1000 + POWER_SAVE_PRELOAD_MS),
++              POWER_SAVE_DAC | POWER_SAVE_CORE_B, "preload expires");
  
-@@ -262,16 +262,22 @@ static void test_service(void)
-     {
-         eq_curve_t before = *eq_profile_curve();
+     /* Resuming disarms the timer. */
+     power_save_init(&ps);
+     power_save_step(&ps, 1, 1, 0, 1000);
+     CHECK_EQI(power_save_step(&ps, 0, 1, 0, 2000), 0, "play resets");
+     CHECK_EQI(power_save_step(&ps, 1, 1, 0, 4500), 0, "re-arms after stop");
+-    CHECK_EQI(power_save_step(&ps, 1, 0, 0, 7600), POWER_SAVE_CORE_B,
+-              "no DAC flag when it is already down");
++    CHECK_EQI(power_save_step(&ps, 1, 0, 0, 4500 + POWER_SAVE_STOP_MS),
++              POWER_SAVE_CORE_B, "no DAC flag when it is already down");
  
--        CHECK(eq_profile_select(6) < 0, "broken slot is rejected");
-+        CHECK(eq_profile_select(13) < 0, "broken slot is rejected");
-         CHECK(eq_profile_curve()->band[0].gain_tdb ==
-               before.band[0].gain_tdb, "rejection leaves the curve untouched");
-     }
- 
-     /* A sixth file appears without recompiling. */
-     write_text(EQDIR "/custom6.cfg", flat_5);
--    CHECK(eq_profile_scan() == 8, "custom6 appears in the picker");
--    CHECK(strcmp(eq_profile_entry_name(7), "Five") == 0,
-+    CHECK(eq_profile_scan() == 15, "custom6 appears in the picker");
-+    CHECK(strcmp(eq_profile_entry_name(14), "Five") == 0,
-           "custom6 label parsed");
-+
-+    /* Neon Drive presets */
-+    CHECK(strcmp(eq_profile_entry_name(5), "Bass Boost") == 0, "Bass Boost listed");
-+    CHECK(strcmp(eq_profile_entry_name(7), "Vocal Boost") == 0, "Vocal Boost listed");
-+    CHECK(eq_profile_select(5) == 0 && eq_profile_curve()->band[0].gain_tdb == 60,
-+          "Bass Boost curve");
- }
- 
- int main(void)
+     if (s_failures == 0) {
+         printf("test_power_save: OK\n");
 diff --git a/firmware/services/tests/test_search_az.c b/firmware/services/tests/test_search_az.c
 new file mode 100644
 index 0000000..41ff6ae
@@ -22185,7 +22250,7 @@ index 0000000..41ff6ae
 +    return s_failures != 0;
 +}
 diff --git a/firmware/startup/ap_ui.c b/firmware/startup/ap_ui.c
-index 0f19ed4..4ce51e1 100644
+index 5b4a477..319a5f1 100644
 --- a/firmware/startup/ap_ui.c
 +++ b/firmware/startup/ap_ui.c
 @@ -41,10 +41,12 @@
@@ -22201,7 +22266,7 @@ index 0f19ed4..4ce51e1 100644
  #include "player/bfs.h"     /* phase 3: A-side file service for Core B */
  
  /* Debug-only System actions (DAC test + USB CDC console). Off by default:
-@@ -578,11 +580,26 @@ static void update_prompt(void)
+@@ -613,11 +615,26 @@ static void update_prompt(void)
      power_off();
  }
  
@@ -22229,7 +22294,7 @@ index 0f19ed4..4ce51e1 100644
      display_clear(0x0000);
      display_flush_rows(0, DISPLAY_H - 1);
      backlight_off();     /* else the panel keeps glowing over a black screen */
-@@ -673,11 +690,10 @@ static void usb_session(void)
+@@ -708,11 +725,10 @@ static void usb_session(void)
  
      usb_power_reset();
  
@@ -22243,7 +22308,7 @@ index 0f19ed4..4ce51e1 100644
      snprintf(s_usb, sizeof s_usb, "x%d r%uM w%uM", r, (unsigned)(rd >> 11), (unsigned)(wr >> 11));
      /* Session forensics: how it ended and which SCSI opcode/LUN was last on
       * the wire. When a host-side tool misbehaves (Nautilus freezing on
-@@ -700,6 +716,10 @@ static void usb_session(void)
+@@ -735,6 +751,10 @@ static void usb_session(void)
              resume_poll(ap_ms(), 1);  /* persist the last position first */
              settings_screen_store();
              (void)log_flush("power");
@@ -22254,19 +22319,19 @@ index 0f19ed4..4ce51e1 100644
              power_off();              /* may return on VBUS (park) */
          }
          while (keys_power())          /* don't leak the exit press */
-@@ -1139,6 +1159,11 @@ static void cdc_overlay_run(void)
+@@ -1175,6 +1195,11 @@ static void cdc_overlay_run(void)
  }
  #endif
  
 +static const char *fw_text(void)
 +{
-+    return "Neon Drive 3";
++    return "Neon Drive 4";
 +}
 +
  /* ---- System: the explicit diagnostic view (BRNOMT-72) -------------------- */
  /* Everything that used to clutter the root menu (hardware probes, USB console,
   * index maintenance) lives here. Same list mechanics as every other menu, but
-@@ -1152,13 +1177,17 @@ static const menu_item_t k_sys_items[] = {
+@@ -1188,13 +1213,17 @@ static const menu_item_t k_sys_items[] = {
  #if AP_CDC_OVERLAY
      { "CDC overlay",   NULL,       cdc_overlay_run },
  #endif
@@ -22286,7 +22351,7 @@ index 0f19ed4..4ce51e1 100644
  };
  #define SYS_ITEM_COUNT ((int)(sizeof k_sys_items / sizeof k_sys_items[0]))
  
-@@ -1583,6 +1612,36 @@ static void vol_nav_apply(input_event_t *ev)
+@@ -1619,6 +1648,126 @@ static void vol_nav_apply(input_event_t *ev)
          ev->type = (ev->type == KEY_UP) ? KEY_DOWN : KEY_UP;
  }
  
@@ -22296,6 +22361,96 @@ index 0f19ed4..4ce51e1 100644
 + * (1) The skin engine calls this pump between sections, so drawing never
 + * starves the decoder; (2) while playing, animation frames are spaced out
 + * and skipped outright when the PCM ring is below a third. */
++/* Neon Drive: switching on takes a HOLD, like the stock firmware. On battery
++ * a tap that is already released by the time we run (or released within
++ * the next 0.4 s) switches straight back off. With USB power there is no
++ * check (the cable must always be able to bring the player up). Then wait
++ * for the release, so the same press cannot count as a power-off hold. */
++static void neon_require_hold(void)
++{
++    int i;
++
++    if (usb_cable())
++        return;
++    for (i = 0; i < 80; i++) {          /* ~0.4 s, counted (no clock needed) */
++        if (!keys_power())
++            board_power_off();
++        panel_io_delay_ms(5);
++    }
++    for (i = 0; i < 1200 && keys_power(); i++)   /* <= ~6 s */
++        panel_io_delay_ms(5);
++}
++
++static unsigned s_pg_ms, s_pg_frames_ms, s_pg_mute_ms;
++static long s_pg_frames = -1;
++static int s_pg_idx = -1, s_pg_tries, s_pg_skips;
++
++static void neon_core_b_reset(void)
++{
++    (void)player_stop();                /* CLOSE + rings down */
++    if (ap_core_b_running())
++        ap_core_b_stop();               /* next start boots a fresh B */
++    audio_output_power_off();           /* ...and a full DAC bring-up */
++}
++
++static void neon_playback_guard(unsigned now)
++{
++    int st = player_get_state();
++    int idx = player_list_position();
++
++    if (st == PLAYER_PLAYING) {
++        ipc_b_status_t bs;
++
++        s_pg_skips = 0;
++        /* playing, but the DAC was left at the mute level (a start path
++         * that skipped the unmute): sound + volume keys come back */
++        if (!audio_output_muted() || bt_hw_routed()) {
++            s_pg_mute_ms = now;
++        } else if ((unsigned)(now - s_pg_mute_ms) >= 800u) {
++            log_printf("guard: playing while muted, unmuting");
++            audio_output_unmute();
++            s_pg_mute_ms = now;
++        }
++        if (ipc_b_poll_state(&bs) >= 0 && bs.frames_consumed != s_pg_frames) {
++            s_pg_frames = bs.frames_consumed;
++            s_pg_frames_ms = now;
++            s_pg_tries = 0;
++        } else if ((unsigned)(now - s_pg_frames_ms) >= 3000u &&
++                   ipc_b_b_decodes() && !bt_hw_routed()) {
++            long pos = player_get_position_ms();
++
++            log_printf("guard: stalled at %ld ms, restarting Core B", pos);
++            neon_core_b_reset();
++            if (player_play_at(idx) == PLAYER_OK && pos > 1000)
++                (void)player_seek(pos);
++            s_pg_frames_ms = now;
++        }
++        return;
++    }
++    s_pg_frames_ms = now;
++    s_pg_mute_ms = now;
++    s_pg_frames = -1;
++    if (st != PLAYER_ERROR || player_list_count() <= 0 ||
++        (unsigned)(now - s_pg_ms) < 1200u)
++        return;
++    s_pg_ms = now;
++    if (idx != s_pg_idx) {
++        s_pg_idx = idx;
++        s_pg_tries = 0;
++    }
++    if (s_pg_tries == 0) {
++        s_pg_tries = 1;
++        log_printf("guard: track %d failed, retry on a fresh Core B", idx);
++        neon_core_b_reset();
++        (void)player_play_at(idx);
++    } else if (s_pg_skips < 5 && idx + 1 < player_list_count()) {
++        s_pg_skips++;
++        log_printf("guard: track %d failed again, skipping", idx);
++        neon_core_b_reset();
++        (void)player_play_at(idx + 1);
++    }
++}
++
 +static void neon_audio_pump(void)
 +{
 +    /* Only the file service: player_process() can fire player events,
@@ -22323,7 +22478,7 @@ index 0f19ed4..4ce51e1 100644
  void ap_ui_loop(void)
  {
      input_event_t ev;
-@@ -1591,6 +1650,7 @@ void ap_ui_loop(void)
+@@ -1627,10 +1776,12 @@ void ap_ui_loop(void)
      player_init();       /* register wav/mp3/flac codecs (registry) */
      player_set_resolver(media_resolve);   /* BRNOMT-90: list index -> path */
      mq_set_pump(player_process);  /* keep audio fed during library scans */
@@ -22331,15 +22486,20 @@ index 0f19ed4..4ce51e1 100644
      ui_init();
      /* After ui_init(): the hook invalidates the Now Playing rows. */
      player_set_callback(player_state_changed, 0);
-@@ -1633,6 +1693,7 @@ void ap_ui_loop(void)
-     player_screen_set_volume(player_get_volume());
+     ap_clock_init();     /* ms clock for the input hold ladder */
++    neon_require_hold(); /* Neon Drive: hold POWER to switch on */
+     /* Active package: the cfg `theme=` id wins; older configs (no key) fall
+      * back to /.rechord/active_theme, then to Mono. Settings reload first
+      * because the id lives in rechord.cfg. */
+@@ -1670,6 +1821,7 @@ void ap_ui_loop(void)
      s_volume_seen = player_get_volume();
+     battery_set_charging(usb_cable());
      battery_poll();      /* BRNOMT-83: seed the gauge before the first draw */
 +    neon_boot_anim(ap_ms);   /* Neon Drive: shutter + sign + loading bar */
      /* Bluetooth: restore the user's choice + remembered devices. The module
       * stays off unless the user enabled it. */
      extras_init();
-@@ -1646,6 +1707,8 @@ void ap_ui_loop(void)
+@@ -1684,6 +1836,8 @@ void ap_ui_loop(void)
       * one that declares home=skin gets the declarative home inserted above it
       * (BACK still reaches Files/USB/System). */
      skin_home_set_actions(open_library, open_player, open_settings);
@@ -22348,7 +22508,7 @@ index 0f19ed4..4ce51e1 100644
      settings_screen_set_theme_applied(home_stack_sync);
      home_stack_sync();
      /* BRNOMT-87: the resume restore runs inside the loop, AFTER the first
-@@ -1699,6 +1762,7 @@ void ap_ui_loop(void)
+@@ -1737,6 +1891,7 @@ void ap_ui_loop(void)
              }
          }
          cable = usb_cable();
@@ -22356,7 +22516,7 @@ index 0f19ed4..4ce51e1 100644
  
          if (sd_present() != s_sd_in) {   /* card inserted / removed */
              s_sd_in = sd_present();
-@@ -1821,6 +1885,10 @@ void ap_ui_loop(void)
+@@ -1860,6 +2015,10 @@ void ap_ui_loop(void)
              resume_poll(now, 1);       /* persist the last position first */
              settings_screen_store();
              (void)log_flush("power");
@@ -22367,7 +22527,7 @@ index 0f19ed4..4ce51e1 100644
              power_off();
          } else if (pev == POWER_EV_SHORT) {
              s_idle_ms = now;
-@@ -1870,10 +1938,43 @@ void ap_ui_loop(void)
+@@ -1909,11 +2068,54 @@ void ap_ui_loop(void)
                  resume_poll(now, 1);      /* persist the position first */
                  settings_screen_store();
                  (void)log_flush("standby");
@@ -22377,8 +22537,19 @@ index 0f19ed4..4ce51e1 100644
 +                }
                  power_off();              /* on VBUS this parks and returns */
                  s_idle_ms = ap_ms();      /* the wake press is not standby */
+                 s_input_ms = s_idle_ms;
              }
          }
++
++        /* Neon Drive: playback self-repair. Field report: tracks that
++         * would not start (or stopped after a skip / at the end of a song)
++         * played after a power cycle, i.e. after a fresh Core B. So:
++         *  - a track that errors gets ONE retry on a freshly restarted
++         *    Core B; if it fails again the list moves on to the next song
++         *    (at most 5 in a row, then it gives up and shows the error);
++         *  - "playing" with the PCM clock frozen for 3 s counts as a stall
++         *    and gets the same restart at the current position. */
++        neon_playback_guard(now);
 +
 +        /* Neon Drive: quick-settings sleep timer - counts from the pick,
 +         * playing or not, then pauses and switches off. */
@@ -22411,23 +22582,23 @@ index 0f19ed4..4ce51e1 100644
          if (player_get_state() == PLAYER_PLAYING)
              s_idle_ms = now;
  
-@@ -1896,8 +1997,7 @@ void ap_ui_loop(void)
+@@ -1977,8 +2179,7 @@ void ap_ui_loop(void)
              if (theme_layout()->home == THEME_HOME_SKIN &&
                  ui_top_screen() == &skin_home_screen &&
                  theme_skin_animated() &&
 -                (unsigned)(now - s_face_ms) >=
--                    (unsigned)theme_skin_refresh_ms()) {
-+                neon_anim_ok(now, s_face_ms, theme_skin_refresh_ms())) {
-                 s_face_ms = now;
-                 if (!skin_home_animate()) {
-                     int h = theme_skin_refresh_h();
-@@ -1914,8 +2014,7 @@ void ap_ui_loop(void)
+-                    skin_refresh_ms_now(now)) {
++                neon_anim_ok(now, s_face_ms, (int)skin_refresh_ms_now(now))) {
+                 unsigned t0 = ap_ms();
+                 int drew;
+ 
+@@ -2001,8 +2202,7 @@ void ap_ui_loop(void)
               * Now Playing/Library/Settings/Browser costs nothing per pass. */
              if (theme_ui_active() && ui_top_screen() != &skin_home_screen &&
                  theme_skin_animated() &&
 -                (unsigned)(now - s_theme_ms) >=
--                    (unsigned)theme_skin_refresh_ms()) {
-+                neon_anim_ok(now, s_theme_ms, theme_skin_refresh_ms())) {
+-                    skin_refresh_ms_now(now)) {
++                neon_anim_ok(now, s_theme_ms, (int)skin_refresh_ms_now(now))) {
                  s_theme_ms = now;
                  /* Now Playing animates its mini cassette/progress: same
                   * static/dynamic split (no art re-stream, small flush). */
@@ -22840,7 +23011,7 @@ index 0000000..be2c807
 +                       int sx, int sy, int sw, void (*pump)(void))
 +{ (void)path; (void)x; (void)y; (void)w; (void)h; (void)sx; (void)sy; (void)sw; (void)pump; return -1; }
 diff --git a/firmware/theme/theme_skin.c b/firmware/theme/theme_skin.c
-index eb0eca7..76196f2 100644
+index 14f0093..9a1c41a 100644
 --- a/firmware/theme/theme_skin.c
 +++ b/firmware/theme/theme_skin.c
 @@ -15,6 +15,8 @@
@@ -22852,7 +23023,7 @@ index eb0eca7..76196f2 100644
  
  #ifdef RECHORD_AP_BUILD
  #include "../services/fs.h"
-@@ -24,14 +26,14 @@
+@@ -24,7 +26,7 @@
  /* Parsed, not stored: the engine scans the text per frame, so raising this
   * costs no RAM (the cassette theme's home needs 49). Keep it just above the
   * largest shipped skin. */
@@ -22861,45 +23032,48 @@ index eb0eca7..76196f2 100644
  #define SKIN_PROPS      12
  #define SKIN_KEY_MAX    20
  #define SKIN_PROP_MAX   144
- #define SKIN_VAL_MAX    64
- #define SKIN_EXPR_STEPS 2048
- #define SKIN_DEPTH      12
+@@ -35,7 +37,7 @@
+  * 16 KB AP main stack, so deep chains overflowed on-device. Unary ! and -
+  * also count here, so 7 is ~11 KB worst case; shipped themes peak at 6. */
+ #define SKIN_DEPTH      7
 -#define SKIN_ITEMS      4
-+#define SKIN_ITEMS      6
++#define SKIN_ITEMS      6          /* Neon Drive: up to 6 home items */
  #define SKIN_FONT_W     8
  #define SKIN_VARS       20
  #define SKIN_VAR_EXPR_MAX 112
-@@ -95,7 +97,9 @@ static int s_refresh_h = -1;
+@@ -100,8 +102,10 @@ static int s_idle_refresh_ms;      /* slower refresh while not playing (0 = same
   * untouched from the last full draw. */
  static int s_dyn_only;
  static int s_dyn_n;
 -static int s_dyn_rect[3][4];
+-static int s_dyn_every[3] = { 1, 1, 1 };   /* flush rect every Nth frame */
 +static int s_dyn_rect[THEME_SKIN_DYN_MAX][4];
++static int s_dyn_every[THEME_SKIN_DYN_MAX] = { 1, 1, 1, 1, 1, 1 };
 +static char s_dir[96];       /* Neon Drive: <root>/<id> for image files */
 +static void (*s_render_pump)(void);
  static int s_animated;
  
  /* ---------------------------------------------------------------- values */
-@@ -243,6 +247,18 @@ static skin_val_t variable(const char *name)
+@@ -255,6 +259,18 @@ static skin_val_t variable(const char *name)
          return v_int(c != 0 && c->st != 0 ? c->st->paused : 0);
-     if (strcmp(name, "stopped") == 0)
+     if (IS("stopped"))
          return v_int(c != 0 && c->st != 0 ? c->st->stopped : 0);
 +    /* Neon Drive: volume as 0..60 steps (player range -60..0 dB; the DAC
 +     * cannot go above 0 dB) and the average bitrate of the current file */
-+    if (strcmp(name, "vol_lv") == 0) {
++    if (IS("vol_lv")) {
 +        int lv = (c != 0 && c->st != 0 ? c->st->volume_db : 0) + 60;
 +        return v_int(lv < 0 ? 0 : (lv > 60 ? 60 : lv));
 +    }
-+    if (strcmp(name, "kbps") == 0)
++    if (IS("kbps"))
 +        return v_int(c != 0 && c->st != 0 ? c->st->kbps : 0);
-+    if (strcmp(name, "charging") == 0)
++    if (IS("charging"))
 +        return v_int(c != 0 && c->st != 0 ? c->st->charging : 0);
-+    if (strcmp(name, "cover") == 0)
++    if (IS("cover"))
 +        return v_int(c != 0 && c->st != 0 ? c->st->cover : 0);
-     if (strcmp(name, "volume") == 0)
+     if (IS("volume"))
          return v_int(c != 0 && c->st != 0 ? c->st->volume_db : 0);
-     if (strcmp(name, "battery") == 0)
-@@ -985,6 +1001,12 @@ static int action_from_word(const char *s)
+     if (IS("battery"))
+@@ -1044,6 +1060,12 @@ static int action_from_word(const char *s)
          return THEME_SKIN_PLAYER;
      if (key_eq(s, "settings"))
          return THEME_SKIN_SETTINGS;
@@ -22912,7 +23086,7 @@ index eb0eca7..76196f2 100644
      return THEME_SKIN_NONE;
  }
  
-@@ -1055,6 +1077,7 @@ int theme_skin_load(const char *root, const char *id, const char *path)
+@@ -1114,6 +1136,7 @@ int theme_skin_load(const char *root, const char *id, const char *path)
          return -1;
      if (read_text(full) != 0)
          return -1;
@@ -22920,7 +23094,15 @@ index eb0eca7..76196f2 100644
  
      s_list.axis = theme_layout()->home_nav;
      s_list.x = -1;
-@@ -1093,6 +1116,15 @@ int theme_skin_load(const char *root, const char *id, const char *path)
+@@ -1131,6 +1154,7 @@ int theme_skin_load(const char *root, const char *id, const char *path)
+     s_dyn_n = 0;
+     s_dyn_only = 0;
+     s_dyn_every[0] = s_dyn_every[1] = s_dyn_every[2] = 1;
++    s_dyn_every[3] = s_dyn_every[4] = s_dyn_every[5] = 1;
+ 
+     p = s_text;
+     while ((n = next_section(&p, &sec)) > 0) {
+@@ -1157,6 +1181,15 @@ int theme_skin_load(const char *root, const char *id, const char *path)
              v = prop(&sec, "dyn3");
              if (v != 0 && parse_rect(v, s_dyn_rect[2]) == 0)
                  s_dyn_n = 3;
@@ -22933,10 +23115,19 @@ index eb0eca7..76196f2 100644
 +            v = prop(&sec, "dyn6");
 +            if (v != 0 && parse_rect(v, s_dyn_rect[5]) == 0)
 +                s_dyn_n = 6;
-         } else if (key_eq(sec.name, "vars") ||
-                    key_eq(sec.name, "vars2") ||
-                    key_eq(sec.name, "vars3")) {
-@@ -1457,6 +1489,120 @@ static const char *row_value(int idx, char *buf, int cap)
+             v = prop(&sec, "dyn_every");
+             if (v != 0 && as_int(v_str(v)) > 0)
+                 s_dyn_every[0] = as_int(v_str(v));
+@@ -1219,7 +1252,7 @@ int theme_skin_idle_refresh_ms(void)
+ 
+ int theme_skin_dyn_every(int idx)
+ {
+-    return idx >= 0 && idx < 3 ? s_dyn_every[idx] : 1;
++    return idx >= 0 && idx < THEME_SKIN_DYN_MAX ? s_dyn_every[idx] : 1;
+ }
+ 
+ int theme_skin_dyn_rect(int idx, int *x0, int *y0, int *x1, int *y1)
+@@ -1693,6 +1726,120 @@ static const char *row_value(int idx, char *buf, int cap)
      return 0;
  }
  
@@ -23057,7 +23248,7 @@ index eb0eca7..76196f2 100644
  static void draw_list(int sel, int top)
  {
      const theme_layout_t *l = theme_layout();
-@@ -1488,26 +1634,36 @@ static void draw_list(int sel, int top)
+@@ -1724,26 +1871,36 @@ static void draw_list(int sel, int top)
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
              const char *value = row_value(idx, vbuf, (int)sizeof vbuf);
  
@@ -23108,7 +23299,7 @@ index eb0eca7..76196f2 100644
              }
          }
          return;
-@@ -1539,14 +1695,20 @@ static void draw_list(int sel, int top)
+@@ -1775,14 +1932,20 @@ static void draw_list(int sel, int top)
              char lbuf[64];
              const char *label = row_label(idx, lbuf, (int)sizeof lbuf);
  
@@ -23134,7 +23325,7 @@ index eb0eca7..76196f2 100644
              }
              x += widths[i] + 16;
          }
-@@ -1593,6 +1755,145 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1829,6 +1992,145 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
          return;
      }
  
@@ -23280,7 +23471,7 @@ index eb0eca7..76196f2 100644
      if (key_eq(type, "fill")) {
          x = eval_int(prop(sec, "x"), ctx, 0);
          y = eval_int(prop(sec, "y"), ctx, 0);
-@@ -1655,9 +1956,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1907,9 +2209,41 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
          ctx->ah = ah;
          x = eval_int(prop(sec, "x"), ctx, 0);
          y = eval_int(prop(sec, "y"), ctx, 0);
@@ -23325,7 +23516,7 @@ index eb0eca7..76196f2 100644
          return;
      }
  
-@@ -1685,12 +2018,50 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1937,12 +2271,50 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
              /* Optional right alignment: `x` is the right edge. The mockups
               * need it for counters, volume and i/N (the engine has no text
               * measuring helper for themes). */
@@ -23380,7 +23571,7 @@ index eb0eca7..76196f2 100644
          return;
      }
  
-@@ -1723,11 +2094,28 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
+@@ -1975,11 +2347,28 @@ static void render_section(const skin_section_t *sec, skin_ctx_t *ctx, int sel)
      }
  
      if (key_eq(type, "list")) {
@@ -23409,7 +23600,7 @@ index eb0eca7..76196f2 100644
  void theme_skin_render(unsigned now, unsigned idle, int sel, int top,
                         const theme_skin_state_t *st)
  {
-@@ -1756,6 +2144,8 @@ void theme_skin_render(unsigned now, unsigned idle, int sel, int top,
+@@ -2008,6 +2397,8 @@ void theme_skin_render(unsigned now, unsigned idle, int sel, int top,
                  continue;
          }
          render_section(&sec, &ctx, sel);
@@ -23419,7 +23610,7 @@ index eb0eca7..76196f2 100644
  }
  
 diff --git a/firmware/theme/theme_skin.h b/firmware/theme/theme_skin.h
-index 1d84910..3933485 100644
+index 849ca0a..c6734a3 100644
 --- a/firmware/theme/theme_skin.h
 +++ b/firmware/theme/theme_skin.h
 @@ -32,7 +32,7 @@
@@ -23442,7 +23633,7 @@ index 1d84910..3933485 100644
  };
  
  /* Read-only state exposed to skin expressions. The UI adapter fills it; the
-@@ -77,9 +79,12 @@ typedef struct theme_skin_state {
+@@ -85,9 +87,12 @@ typedef struct theme_skin_state {
      int  playlist_pos;            /* 1-based, 0 when no list */
      int  playlist_count;
      int  shuffle;
@@ -23455,7 +23646,7 @@ index 1d84910..3933485 100644
  } theme_skin_state_t;
  
  /* Dynamic list source for a compiled screen (Library, Settings, Browser,
-@@ -110,10 +115,15 @@ typedef struct theme_skin_art {
+@@ -118,10 +123,15 @@ typedef struct theme_skin_art {
  
  void theme_skin_set_art(const theme_skin_art_t *art);
  
@@ -23469,8 +23660,8 @@ index 1d84910..3933485 100644
  void theme_skin_set_dynamic_only(int on);
 +#define THEME_SKIN_DYN_MAX 6   /* Neon Drive: was 3 (dyn..dyn6) */
  int  theme_skin_dyn_rect(int idx, int *x0, int *y0, int *x1, int *y1);
- 
- /* Navigation results for a compiled screen using the skin's prev/next map.
+ /* Flush rect `idx` only every Nth animate frame (dyn_every/dyn2_every/...);
+  * 1 when unset. Slow-changing areas stop costing bus time every frame. */
 diff --git a/firmware/ui/screens/az_screen.c b/firmware/ui/screens/az_screen.c
 new file mode 100644
 index 0000000..a65556f
@@ -23620,7 +23811,7 @@ index 0000000..a65556f
 +    0,
 +};
 diff --git a/firmware/ui/screens/eq_screen.c b/firmware/ui/screens/eq_screen.c
-index d83a3a3..c8bcfc9 100644
+index c78f588..6152fea 100644
 --- a/firmware/ui/screens/eq_screen.c
 +++ b/firmware/ui/screens/eq_screen.c
 @@ -2,7 +2,7 @@
@@ -23681,7 +23872,7 @@ index d83a3a3..c8bcfc9 100644
  static void eq_on_enter(void)
  {
      if (!eq_profile_ready())
-@@ -87,38 +61,78 @@ static void eq_on_exit(void)
+@@ -87,38 +61,88 @@ static void eq_on_exit(void)
      s_reenter_reset = 1;
  }
  
@@ -23701,8 +23892,6 @@ index d83a3a3..c8bcfc9 100644
  {
 -    menu_item_t items[EQ_BANDS_MAX + 2];
 -    menu_model_t model;
-+    static const char *const k_short[EQ_BANDS_MAX] = {
-+        "31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K" };
      const eq_curve_t *c = eq_profile_curve();
 -    char band_label[EQ_BANDS_MAX][10];
 -    int i, n = 0;
@@ -23756,7 +23945,19 @@ index d83a3a3..c8bcfc9 100644
 +            display_fill_rect(cx - 3, 87, cx + 3, y, bar);
 +        display_fill_rect(cx - 7, y - 2, cx + 7, y + 2,
 +                          sel && s_editing ? THEME_COLOR_WARN : THEME_COLOR_FG);
-+        display_draw_text(cx - (int)strlen(k_short[i]) * 4, 135, k_short[i],
++        {   /* "80 Hz" -> "80", "1.3 kHz" -> "1.3K" */
++            char lab[12], *sp;
++
++            if (eq_profile_format_freq(c->band[i].freq_hz, lab, sizeof lab) < 0)
++                lab[0] = '\0';
++            sp = strchr(lab, ' ');
++            if (sp != 0) {
++                if (sp[1] == 'k') { sp[0] = 'K'; sp[1] = '\0'; }
++                else sp[0] = '\0';
++            }
++            snprintf(fbuf, sizeof fbuf, "%s", lab);
++        }
++        display_draw_text(cx - (int)strlen(fbuf) * 4, 135, fbuf,
 +                          sel ? THEME_COLOR_FG : THEME_COLOR_DIM,
 +                          sel ? THEME_COLOR_SELECT_BG : THEME_COLOR_BG);
      }
@@ -23786,16 +23987,16 @@ index d83a3a3..c8bcfc9 100644
  }
  
  static void eq_handle_event(const input_event_t *ev)
-@@ -187,7 +201,7 @@ static uint8_t     s_store_mode;
+@@ -187,7 +211,7 @@ static uint8_t     s_store_mode;
  
  static int custom_count(void)
  {
--    int n = eq_profile_count() - 5;
+-    int n = eq_profile_count() - EQ_PROFILE_BUILTINS;
 +    int n = eq_profile_count() - eq_profile_builtin_count();
  
      return (n > 0) ? n : 0;
  }
-@@ -199,17 +213,22 @@ static void prof_on_enter(void)
+@@ -199,17 +223,22 @@ static void prof_on_enter(void)
      menu_view_init(&s_prof_view);
  }
  
@@ -23806,7 +24007,7 @@ index d83a3a3..c8bcfc9 100644
 +
  static void prof_draw(void)
  {
--    menu_item_t items[16];
+-    menu_item_t items[EQ_PROFILE_BUILTINS + EQ_PROFILE_SLOTS + 1];
 +    menu_item_t items[PROF_ROWS_MAX];
      menu_model_t model;
      int i, n = 0;
@@ -23815,13 +24016,13 @@ index d83a3a3..c8bcfc9 100644
          int customs = custom_count();
  
 -        for (i = 0; i < customs; i++) {
--            items[n].label = eq_profile_entry_name(5 + i);
+-            items[n].label = eq_profile_entry_name(EQ_PROFILE_BUILTINS + i);
 +        for (i = 0; i < customs && n < PROF_ROWS_MAX - 1; i++) {
 +            items[n].label = eq_profile_entry_name(eq_profile_builtin_count() + i);
              items[n].value_text = 0;
              items[n].on_select = 0;
              n++;
-@@ -224,7 +243,7 @@ static void prof_draw(void)
+@@ -224,7 +253,7 @@ static void prof_draw(void)
      } else {
          int count = eq_profile_count();
  
@@ -23830,11 +24031,11 @@ index d83a3a3..c8bcfc9 100644
              items[n].label = eq_profile_entry_name(i);
              items[n].value_text = 0;
              items[n].on_select = 0;
-@@ -270,7 +289,7 @@ static void prof_handle_event(const input_event_t *ev)
+@@ -270,7 +299,7 @@ static void prof_handle_event(const input_event_t *ev)
      case KEY_SELECT:
          if (s_store_mode) {
              if (s_prof_view.cursor < custom_count() &&
--                eq_profile_save_to_row(5 + s_prof_view.cursor) == 0)
+-                eq_profile_save_to_row(EQ_PROFILE_BUILTINS + s_prof_view.cursor) == 0)
 +                eq_profile_save_to_row(eq_profile_builtin_count() + s_prof_view.cursor) == 0)
                  ui_pop_screen();
          } else if (s_prof_view.cursor == eq_profile_count()) {
@@ -24358,7 +24559,7 @@ index 2407857..d17cbf6 100644
      }
  
 diff --git a/firmware/ui/screens/player_screen.c b/firmware/ui/screens/player_screen.c
-index b36a972..3ee0526 100644
+index df3251e..f2826db 100644
 --- a/firmware/ui/screens/player_screen.c
 +++ b/firmware/ui/screens/player_screen.c
 @@ -102,7 +102,7 @@ static void player_screen_draw(void)
@@ -24418,7 +24619,7 @@ index b36a972..3ee0526 100644
          return;
      }
      set_no_track(0);
-@@ -488,8 +496,7 @@ void player_screen_refresh(void)
+@@ -491,8 +499,7 @@ void player_screen_refresh(void)
      int old_playing;
  
      if (player_get_track(&ti) != PLAYER_OK) {
@@ -24768,7 +24969,7 @@ index 0000000..63e7db0
 +    0,
 +};
 diff --git a/firmware/ui/screens/settings_screen.c b/firmware/ui/screens/settings_screen.c
-index 576b00d..dcbea07 100644
+index bb38f82..b502099 100644
 --- a/firmware/ui/screens/settings_screen.c
 +++ b/firmware/ui/screens/settings_screen.c
 @@ -239,7 +239,7 @@ typedef struct {
@@ -24829,7 +25030,7 @@ index 6a65287..e9599ad 100644
  
  /* Repaint just the package's dynamic primitives (0 = no dyn rects). */
 diff --git a/firmware/ui/screens/theme_ui.c b/firmware/ui/screens/theme_ui.c
-index 58aa202..b268a3d 100644
+index 3084e5e..33a754f 100644
 --- a/firmware/ui/screens/theme_ui.c
 +++ b/firmware/ui/screens/theme_ui.c
 @@ -1,6 +1,8 @@
@@ -24841,16 +25042,16 @@ index 58aa202..b268a3d 100644
  #include <string.h>
  
  #include "theme_ui.h"
-@@ -9,6 +11,7 @@
- #include "../../theme/theme_pkg.h"
+@@ -10,6 +12,7 @@
  #include "../../theme/theme_runtime.h"
  #include "../../services/art_pack.h"
+ #include "../../services/audio_scope.h"
 +#include "../../services/fs.h"
  #include "../../services/bt_link.h"
+ #include "../../player/ipc_b.h"
  #include "../../services/rechord_files.h"
- 
-@@ -93,6 +96,61 @@ void theme_ui_note_input(void)
-     s_last_input_ms = s_now_ms;
+@@ -117,6 +120,61 @@ static void scope_update(void)
+         audio_scope_idle(&s_scope, dt);
  }
  
 +/* Neon Drive: average bitrate = file size / duration, measured once per
@@ -24911,18 +25112,16 @@ index 58aa202..b268a3d 100644
  void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
  {
      if (st == 0)
-@@ -103,7 +161,9 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
-     st->paused = player_get_state() == PLAYER_PAUSED;
-     st->stopped = player_get_state() == PLAYER_STOPPED;
-     st->volume_db = player_get_volume();
--    st->battery_pct = -1;
-+    st->battery_pct = battery_percent();   /* Neon Drive: skins show it */
-+    st->charging = battery_charging();
+@@ -136,6 +194,8 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+     st->wave_l = s_scope.wave_l;
+     st->wave_r = s_scope.wave_r;
+     st->wave_n = AUDIO_SCOPE_N;
++    st->charging = battery_charging();   /* Neon Drive */
 +    st->cover = theme_ui_cover();
      st->position_ms = player_get_position_ms();
      st->shuffle = player_get_shuffle();
      st->repeat = player_get_repeat();
-@@ -116,8 +176,8 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+@@ -148,8 +208,8 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
          st->bt_stream = bt->streaming ? 1 : 0;
      }
      st->state = st->playing ? "Playing" : (st->paused ? "Paused" : "Stopped");
@@ -24933,7 +25132,7 @@ index 58aa202..b268a3d 100644
      st->album = "";
      st->path = "";
      st->heading = heading != 0 ? heading : "";
-@@ -131,6 +191,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
+@@ -163,6 +223,7 @@ void theme_ui_fill_state(theme_skin_state_t *st, const char *heading)
          st->sample_rate = s_track.sample_rate;
          st->playlist_pos = s_track.playlist_pos;
          st->playlist_count = s_track.playlist_count;
@@ -24941,10 +25140,10 @@ index 58aa202..b268a3d 100644
      }
  }
  
-@@ -147,7 +208,7 @@ int theme_ui_draw_dynamic(const theme_skin_state_t *st, int sel, int top)
-     theme_skin_set_dynamic_only(1);
+@@ -183,7 +244,7 @@ int theme_ui_draw_dynamic(const theme_skin_state_t *st, int sel, int top)
      theme_skin_render(s_now_ms, s_now_ms - s_last_input_ms, sel, top, st);
      theme_skin_set_dynamic_only(0);
+     frame++;
 -    for (i = 0; i < 3; i++) {
 +    for (i = 0; i < THEME_SKIN_DYN_MAX; i++) {
          int x0, y0, x1, y1;
@@ -24964,27 +25163,26 @@ index 35d6e4a..1abb775 100644
 +
  #endif /* RECHORD_UI_THEME_UI_H */
 diff --git a/firmware/ui/tests/mock_eq.c b/firmware/ui/tests/mock_eq.c
-index 8f318a4..78f0103 100644
+index 9018b1d..128ef0f 100644
 --- a/firmware/ui/tests/mock_eq.c
 +++ b/firmware/ui/tests/mock_eq.c
-@@ -56,6 +56,7 @@ int eq_profile_save(void) { mock_eq_save_calls++; return 0; }
+@@ -57,6 +57,7 @@ int eq_profile_save(void) { mock_eq_save_calls++; return 0; }
  int eq_profile_scan(void) { return eq_profile_count(); }
  
- int eq_profile_count(void) { return 5 + s_custom; }
-+int eq_profile_builtin_count(void) { return 5; }
+ int eq_profile_count(void) { return EQ_PROFILE_BUILTINS + s_custom; }
++int eq_profile_builtin_count(void) { return EQ_PROFILE_BUILTINS; }
  
  const char *eq_profile_entry_name(int index)
  {
 diff --git a/firmware/ui/tests/mock_services.c b/firmware/ui/tests/mock_services.c
-index 6d4fd07..9ece245 100644
+index a26721c..b4c3a50 100644
 --- a/firmware/ui/tests/mock_services.c
 +++ b/firmware/ui/tests/mock_services.c
-@@ -744,3 +744,19 @@ unsigned extras_most_played_order(unsigned char *order, unsigned cap)
-     (void)cap;
+@@ -767,3 +767,18 @@ int ipc_b_ring_window(const volatile int32_t **ring, uint32_t *rd,
+     (void)ring; (void)rd; (void)mask; (void)frames;
      return 0;
  }
 +/* Neon Drive: theme_ui reads the gauge for skins */
-+int battery_percent(void) { return -1; }
 +
 +/* Neon Drive: theme_ui measures the track's file size (kbps); no files here */
 +fs_file_t *fs_open_read(const char *path) { (void)path; return 0; }
@@ -25000,10 +25198,10 @@ index 6d4fd07..9ece245 100644
 +                       int sx, int sy, int sw, void (*pump)(void))
 +{ (void)path; (void)x; (void)y; (void)w; (void)h; (void)sx; (void)sy; (void)sw; (void)pump; return -1; }
 diff --git a/firmware/ui/tests/run_tests.sh b/firmware/ui/tests/run_tests.sh
-index 968950c..433f204 100644
+index 6443f1f..e0a070b 100644
 --- a/firmware/ui/tests/run_tests.sh
 +++ b/firmware/ui/tests/run_tests.sh
-@@ -32,6 +32,7 @@ $CC $CFLAGS -I.. -I../.. -I../../services -I../../player -o .work/ui_tests \
+@@ -34,6 +34,7 @@ $CC $CFLAGS -I.. -I../.. -I../../services -I../../player -o .work/ui_tests \
      ../../theme/theme.c ../../theme/themes_builtin.c ../../theme/theme_pkg.c \
      ../../theme/theme_file.c ../../theme/theme_runtime.c \
      ../../theme/theme_assets.c ../../theme/theme_skin.c \
@@ -25012,18 +25210,18 @@ index 968950c..433f204 100644
  
  .work/ui_tests
 diff --git a/firmware/ui/tests/test_eq_screen.c b/firmware/ui/tests/test_eq_screen.c
-index 59f2d78..5ed4eb9 100644
+index 3448ec2..bc14003 100644
 --- a/firmware/ui/tests/test_eq_screen.c
 +++ b/firmware/ui/tests/test_eq_screen.c
 @@ -52,9 +52,8 @@ void test_eq_screen(void)
      CHECK(mock_display_text_find("Enabled") >= 0);
      CHECK(mock_display_text_find("Off") >= 0);
      CHECK(mock_display_text_find("Profile") >= 0);
--    CHECK(mock_display_text_find("31 Hz") >= 0);
--    CHECK(mock_display_text_find("1 kHz") >= 0);
+-    CHECK(mock_display_text_find("80 Hz") >= 0);
+-    CHECK(mock_display_text_find("1.3 kHz") >= 0);
 -    CHECK(mock_display_text_find("0.0") >= 0);
-+    CHECK(mock_display_text_find("31") >= 0);      /* graphic EQ labels */
-+    CHECK(mock_display_text_find("1K") >= 0);
++    CHECK(mock_display_text_find("80") >= 0);      /* graphic EQ labels */
++    CHECK(mock_display_text_find("1.3K") >= 0);
  
      /* Enabled row: SELECT toggles the effect. */
      press(KEY_SELECT);
@@ -25032,7 +25230,7 @@ index 59f2d78..5ed4eb9 100644
      /* Move to Band 1 (rows: Enabled, Profile, Band 1). */
      key_n(KEY_DOWN, 2);
 +    ui_render();
-+    CHECK(mock_display_text_find("31 Hz") >= 0);   /* detail of the band */
++    CHECK(mock_display_text_find("80 Hz") >= 0);   /* detail of the band */
 +    CHECK(mock_display_text_find("0.0") >= 0);
      press(KEY_SELECT);                 /* enter edit mode */
 +    mock_display_reset();
@@ -25138,7 +25336,7 @@ index cd29052..8edec91 100644
      theme_layout_reset();
  }
 diff --git a/firmware/ui/tests/test_settings_keys.c b/firmware/ui/tests/test_settings_keys.c
-index a1ddba6..4e8290d 100644
+index 8817249..cfd3614 100644
 --- a/firmware/ui/tests/test_settings_keys.c
 +++ b/firmware/ui/tests/test_settings_keys.c
 @@ -237,34 +237,33 @@ static void test_settings_screen_binding(void)
@@ -25199,7 +25397,7 @@ index a1ddba6..4e8290d 100644
      e = ev(KEY_SELECT); ui_handle_event(&e);
      CHECK_EQ_INT(settings_screen_get()->replaygain_mode, 0);
      CHECK_EQ_INT(mock_player_replaygain_mode(), 0);
-@@ -420,6 +419,15 @@ static void test_quick_screen(void)
+@@ -423,6 +422,15 @@ static void test_quick_screen(void)
      e = ev(KEY_SELECT); ui_handle_event(&e);          /* off -> all */
      CHECK_EQ_INT(settings_screen_get()->repeat_mode, 1);
  

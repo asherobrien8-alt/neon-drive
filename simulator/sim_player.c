@@ -241,3 +241,11 @@ void player_get_queue_source(int *kind, char *value, int cap, int *cat)
 unsigned flac_diag_block, flac_diag_channels;
 unsigned long flac_diag_need;
 int flac_diag_reason;
+
+/* upstream audio tap: the sim has no PCM ring */
+int ipc_b_ring_window(const volatile int32_t **ring, uint32_t *rd,
+                      uint32_t *mask, int *frames)
+{
+    (void)ring; (void)rd; (void)mask; (void)frames;
+    return 0;
+}

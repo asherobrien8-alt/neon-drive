@@ -2,6 +2,7 @@
 
 A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 
+- **Neon Drive 4 (playback repair).** Rebased on the latest ReChord (its player fixes for skips, format changes and the DAC unmute), Core B kept awake longer instead of being shut down 3 s after every stop, and a self-repair: a song that will not start gets one retry on a freshly restarted decoder core + DAC, then the list moves on; a "playing" state with a frozen audio clock or a muted DAC is fixed on its own. MP3s are found even behind junk or broken tags; MP4/WebM files renamed to .mp3 are recognised (and skipped). Switching on is a hold again. `firmware/coreb-emu/` runs the real Core B image in an emulator to check these flows.
 - **Music that actually plays.** MP3s used to stutter and crawl: the decoder Core B used (minimp3) is floating point, and the Echo Mini's second core has no FPU, so every MP3 needed ~170 MIPS it doesn't have (and the old adapter also dropped frames). Neon Drive swaps in **libmad**, a fixed-point decoder: about **16 MIPS** for the same file, 10x less. FLAC and WAV were already fine.
 - **Volume that does something.** The DAC tops out at 0 dB, but the old range kept counting up to +20 dB with no change in sound. The range is now 60 real steps, and the runner covers it exactly.
 - **Night-city home screen.** A painted cyberpunk skyline (Tokyo / Bangkok / Chongqing vibes: towers, kanji neon, a river and a bridge full of traffic) next to Cyberpunk-style slanted menu tags: **MUSIC, NOW PLAYING, MUSIC SETUP, SYSTEM**. The selected tag glitches like a dying neon tube, signs stutter, headlights slide across the bridge.
@@ -46,7 +47,7 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 | Bluetooth headphones | ✅ | ✅ (new in ReChord, still early) |
 | USB DAC mode | ✅ | 🟡 early |
 | 96 kHz files | ✅ | ✅ (rare crackle) |
-| Copy music over USB | ✅ | ✅ internal storage (SD card is read-only over USB; use a card reader) |
+| Copy music over USB | ✅ | ✅ internal storage (SD card is read-only over USB, Windows says "write protected"; use a card reader) |
 | Themes / live wallpaper / runner | ❌ | ✅ |
 
 **You can always go back.** Copy FiiO's official firmware file onto the player the same way and it returns to stock.

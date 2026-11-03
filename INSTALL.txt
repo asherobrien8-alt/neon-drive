@@ -14,7 +14,7 @@ STEP 1 - FIRMWARE
     at the very top level (NOT inside any folder).
  3. In Windows, right-click the player's drive and choose Eject. Unplug it.
  4. Restart the player. It installs by itself. Wait until it boots up.
- 5. Check it took: SYSTEM -> Firmware must say "Neon Drive 4".
+ 5. Check it took: SYSTEM -> Firmware must say "Neon Drive 5".
     Do STEP 1 again for every new version - the theme alone is not enough.
 
 STEP 2 - THEME

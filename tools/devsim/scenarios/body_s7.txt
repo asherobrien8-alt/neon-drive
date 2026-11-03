@@ -1,0 +1,42 @@
+mark S7 search: Music > Search, type TU, GO, play the result
+press DOWN
+press DOWN
+press SEL
+wait 600
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 300
+press DOWN
+press SEL
+wait 300
+shot search_tu
+hold SEL 900
+wait 800
+shot search_results
+press SEL
+wait 1500
+shot search_after_sel
+listen 5000
+mark back out x3 and let it continue
+press BACK
+press BACK
+press BACK
+listen 8000

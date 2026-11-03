@@ -87,7 +87,7 @@ index 5ea9bb5..6d8d84e 100644
  void audio_output_quick_mute(void);
  
 diff --git a/firmware/bb/bb_main.c b/firmware/bb/bb_main.c
-index 9148526..4110529 100644
+index 9148526..ba1466b 100644
 --- a/firmware/bb/bb_main.c
 +++ b/firmware/bb/bb_main.c
 @@ -42,6 +42,7 @@
@@ -98,7 +98,77 @@ index 9148526..4110529 100644
  extern const codec_t codec_flac;
  
  extern uint32_t __bb_stack_top;
-@@ -321,6 +322,10 @@ void bb_reset(void)
+@@ -76,6 +77,7 @@ static uint32_t        s_eq_gen;
+ static long s_emitted;              /* frames emitted after leading trim */
+ static int  s_leading_trimmed = 1;  /* 0 until the encoder delay is dropped */
+ static int  s_delay, s_pad;
++static int  s_lead_left;            /* encoder delay still to drop (frames) */
+ static long s_total;                /* exact decoder frame count (0 unknown) */
+ 
+ static void dmb(void)
+@@ -90,7 +92,23 @@ static void trim_reset(void)
+     s_pad = (int)CTRL[IPC_C_GAP_PAD];
+     s_total = (long)CTRL[IPC_C_GAP_TOTAL];
+     s_emitted = 0;
+-    s_leading_trimmed = (s_delay == 0) ? 1 : 0;
++    s_lead_left = s_delay > 0 ? s_delay : 0;
++    s_leading_trimmed = (s_lead_left == 0) ? 1 : 0;
++}
++
++/* Neon Drive: a SEEK lands mid-stream. The encoder delay belongs to the
++ * very start, so nothing is dropped after a seek, and the end trim counts
++ * from the seek position (frames = ms * rate). */
++static void trim_after_seek(uint32_t ms)
++{
++    trim_reset();
++    s_lead_left = 0;
++    s_leading_trimmed = 1;
++    s_emitted = (long)(((unsigned long long)ms * (unsigned)s_rate) / 1000u);
++    if (s_emitted > s_delay)
++        s_emitted -= s_delay;
++    else
++        s_emitted = 0;
+ }
+ 
+ static void ring_write(uint32_t off, const void *src, uint32_t n)
+@@ -174,7 +192,7 @@ static void handle_command(void)
+     case IPC_C_SEEK:
+         if (s_codec != 0) {
+             (void)s_codec->seek(s_cstate, (long)CTRL[IPC_C_ARG]);
+-            trim_reset();               /* audible stream repositioned */
++            trim_after_seek(CTRL[IPC_C_ARG]);   /* stream repositioned */
+             eq_bank_reset(&s_eq);
+             CTRL[IPC_C_BEOF] = 0;
+         }
+@@ -224,15 +242,24 @@ static void decode_round(void)
+ 
+     /* Gapless: drop the encoder-delay samples at the very start. */
+     {
+-        int lead = s_leading_trimmed ? 0 : s_delay;
++        /* Neon Drive fix: the delay can be longer than one batch (LAME's
++         * 1105 samples > CHUNK_FRAMES = 1024). The old code dropped every
++         * batch whole without counting down, so an MP3 with a LAME header
++         * - nearly every MP3 - never played a sample: silence until EOF. */
++        int lead = s_leading_trimmed ? 0 : s_lead_left;
+ 
+         if (lead > 0) {
+-            if (lead >= got)
+-                return;               /* whole batch was delay: drop it */
++            if (lead >= got) {
++                s_lead_left -= got;   /* whole batch was delay: drop it */
++                if (s_lead_left <= 0)
++                    s_leading_trimmed = 1;
++                return;
++            }
+             memmove(s_pcm, s_pcm + (long)lead * s_channels,
+                     (size_t)((long)(got - lead) * s_channels) *
+                         sizeof(int32_t));
+             got -= lead;
++            s_lead_left = 0;
+             s_leading_trimmed = 1;
+         }
+     }
+@@ -321,6 +348,10 @@ void bb_reset(void)
      CTRL[IPC_SH_MAGIC] = IPC_SH_MAGIC_VAL;   /* phase-1 gate / AP poll */
      CTRL[IPC_C_BSTATE] = IPC_BS_IDLE;
  
@@ -131,6 +201,45 @@ index fbd079d..1111e04 100644
  
  /* One measurement step (what battery_poll does after reading the ADC): apply
   * the charge offset, smooth, and update the cached values. Exposed for tests. */
+diff --git a/firmware/player/bfs.c b/firmware/player/bfs.c
+index 4d92a87..530cab8 100644
+--- a/firmware/player/bfs.c
++++ b/firmware/player/bfs.c
+@@ -293,8 +293,21 @@ const char *bfs_preopen_path(void)
+     return (s_pre_valid && s_pre.io != 0) ? s_pre_path : 0;
+ }
+ 
++/* Neon Drive: the AP loop is blocked while a track starts (DAC bring-up,
++ * B's open handshake) and while long frames draw; everything that waits
++ * pumps bfs_poll, so the key sampler rides along here and a short press
++ * during those few hundred ms is queued instead of lost. */
++static void (*s_idle_hook)(void);
++
++void bfs_set_idle_hook(void (*fn)(void))
++{
++    s_idle_hook = fn;
++}
++
+ void bfs_poll(void)
+ {
+     poll_svc(&s_cur);
+     poll_svc(&s_pre);
++    if (s_idle_hook)
++        s_idle_hook();
+ }
+diff --git a/firmware/player/bfs.h b/firmware/player/bfs.h
+index ce8b7c9..fc65074 100644
+--- a/firmware/player/bfs.h
++++ b/firmware/player/bfs.h
+@@ -21,6 +21,8 @@ int  bfs_open(const char *path);
+ 
+ /* Service seeks and refill the rings ahead of B. Call every AP loop pass. */
+ void bfs_poll(void);
++/* Called at the end of every bfs_poll (Neon Drive: key sampling). */
++void bfs_set_idle_hook(void (*fn)(void));
+ 
+ /* Stop serving and close both files (idempotent). */
+ void bfs_close(void);
 diff --git a/firmware/player/codecs/libmad/COPYING b/firmware/player/codecs/libmad/COPYING
 new file mode 100644
 index 0000000..d60c31a
@@ -20523,8 +20632,70 @@ index 0000000..f12ea62
 +unsigned mp3_mad_state_bytes(void);
 +
 +#endif
+diff --git a/firmware/player/ipc_b_target.c b/firmware/player/ipc_b_target.c
+index 4d8c5e8..6e936fc 100644
+--- a/firmware/player/ipc_b_target.c
++++ b/firmware/player/ipc_b_target.c
+@@ -198,10 +198,22 @@ static uint32_t codec_id_for(const char *path)
+             dot = p;
+     if (dot == 0)
+         return 0;                 /* wav */
+-    if (strcmp(dot, ".flac") == 0)
+-        return 2;
+-    if (strcmp(dot, ".mp3") == 0)
+-        return 1;
++    /* Neon Drive: any case (".MP3" / ".Flac" from Windows tools used to
++     * open as WAV on Core B and fail). */
++    {
++        char e[6];
++        int i;
++
++        for (i = 0; i < 5 && dot[i] != '\0'; i++)
++            e[i] = (dot[i] >= 'A' && dot[i] <= 'Z') ? (char)(dot[i] + 32) : dot[i];
++        e[i] = '\0';
++        if (dot[i] != '\0')
++            return 0;
++        if (strcmp(e, ".flac") == 0)
++            return 2;
++        if (strcmp(e, ".mp3") == 0)
++            return 1;
++    }
+     return 0;
+ }
+ 
+@@ -856,12 +868,28 @@ int ipc_b_seek(long ms)
+     if (s_preload_valid)
+         return 0;
+ 
++    /* Neon Drive: quiesce BOTH ends before the ring indices move. The old
++     * order zeroed RD/WR while Core B was still inside a decode round and
++     * while the TX ISR was still reading: B then published its stale write
++     * index (WR far ahead of RD = 0), its "ring full" test wrapped, and it
++     * overwrote the ring nonstop -- every seek during playback left a click
++     * on every chunk (~40/s) until the next track (devsim PCM capture,
++     * "ipc: pause ... ring 1561781"). Now: the ISR stops reading, B is told
++     * to stop and SEEK is acked only between rounds, then the ring resets. */
++    if (!g_paused)
++        audio_output_quick_mute();
++    rknano_i2s_hold(1);                  /* the AP ISR leaves RD alone */
+     sh_set(IPC_SH_STATE, IPC_SH_IDLE);   /* stop B's production */
++    (void)b_seek_now(ms);                /* ack => B is idle between rounds */
+     sh_set(IPC_SH_RD, 0);
+     sh_set(IPC_SH_WR, 0);
+-
+-    (void)b_seek_now(ms);
+     sh_set(IPC_SH_FRAMES, 0);
++    dmb();
+     sh_set(IPC_SH_STATE, g_paused ? IPC_SH_PAUSE : IPC_SH_RUN);
++    if (!g_paused) {
++        rknano_i2s_hold(0);              /* B re-arms the feeder as it writes */
++        rknano_i2s_kick();
++        audio_output_unmute();
++    }
+     return 0;
+ }
 diff --git a/firmware/player/player.c b/firmware/player/player.c
-index cb07245..aa1f3e2 100644
+index cb07245..15cee44 100644
 --- a/firmware/player/player.c
 +++ b/firmware/player/player.c
 @@ -28,7 +28,7 @@
@@ -20551,6 +20722,34 @@ index cb07245..aa1f3e2 100644
  }
  
  int player_play_list(const uint16_t *idx, int n, int start)
+@@ -1187,6 +1188,15 @@ int player_list_position(void)
+     return p > 0 ? p - 1 : -1;
+ }
+ 
++/* Neon Drive: media-index record of the current track (-1 when none), so a
++ * song list can put its cursor on what is playing, shuffle or not. */
++int player_current_record(void)
++{
++    uint16_t r = playlist_current(&g.list);
++
++    return (playlist_count(&g.list) > 0 && r != PLAYLIST_IDX_NONE) ? (int)r : -1;
++}
++
+ int player_list_title(int index, char *buf, int cap)
+ {
+     uint16_t ridx;
+diff --git a/firmware/player/player.h b/firmware/player/player.h
+index 7282fc3..9fc96e6 100644
+--- a/firmware/player/player.h
++++ b/firmware/player/player.h
+@@ -184,6 +184,7 @@ void  player_get_queue_source(int *kind, char *value, int cap, int *cat);
+  * title; the caller falls back to "Track N" when it returns < 0. */
+ int   player_list_count(void);
+ int   player_list_position(void);
++int   player_current_record(void);   /* Neon Drive: -1 when none */
+ int   player_list_title(int index, char *buf, int cap);
+ /* Jump to list position `index` and play it (0-based). Keeps the list and its
+  * queue origin. Returns PLAYER_OK or < 0. */
 diff --git a/firmware/player/tests/fixture_mp3_sine.h b/firmware/player/tests/fixture_mp3_sine.h
 new file mode 100644
 index 0000000..d1fa79e
@@ -21369,7 +21568,7 @@ index e01b6f5..bfa142e 100644
  int      media_db_get(uint32_t i, media_rec_t *out);
  void     media_db_close(void);
 diff --git a/firmware/services/media_query.c b/firmware/services/media_query.c
-index b45e94a..93d0cb5 100644
+index b45e94a..eaa8f80 100644
 --- a/firmware/services/media_query.c
 +++ b/firmware/services/media_query.c
 @@ -83,6 +83,23 @@ static int ci_cmp(const char *a, const char *b)
@@ -21447,7 +21646,7 @@ index b45e94a..93d0cb5 100644
      media_db_close();
      if (s_cells != 0 || s_idx != 0) {
          scratch_release(SCRATCH_OWNER_INDEX);
-@@ -537,3 +582,505 @@ void mq_done(void)
+@@ -537,3 +582,511 @@ void mq_done(void)
      s_cap = 0;
      s_truncated = 0;
  }
@@ -21781,6 +21980,12 @@ index b45e94a..93d0cb5 100644
 +    unsigned nseg = 0, i, o = 0;
 +    char *p;
 +
++    /* Neon Drive: Windows tools start .m3u8 files with a UTF-8 BOM; on a
++     * playlist without #EXTM3U it sat in front of the first path and that
++     * song silently went missing. */
++    if ((unsigned char)line[0] == 0xEFu && (unsigned char)line[1] == 0xBBu &&
++        (unsigned char)line[2] == 0xBFu)
++        line += 3;
 +    while (*line == ' ' || *line == '\t')
 +        line++;
 +    if (line[0] == '\0' || line[0] == '#')
@@ -22085,10 +22290,10 @@ index 0461c9a..5e4a560 100644
          printf("test_power_save: OK\n");
 diff --git a/firmware/services/tests/test_search_az.c b/firmware/services/tests/test_search_az.c
 new file mode 100644
-index 0000000..41ff6ae
+index 0000000..42e77d1
 --- /dev/null
 +++ b/firmware/services/tests/test_search_az.c
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,161 @@
 +/*
 + * test_search_az.c — Neon Drive: mq_search_init + A-Z helpers.
 + */
@@ -22216,7 +22421,8 @@ index 0000000..41ff6ae
 +              "../Music/./sub/../Roadgame.flac", f);
 +        fclose(f);
 +        f = fopen(".work/Internal/Playlists/Gym.m3u", "w");
-+        fputs("/Internal/Music/99 Lights.flac\n", f);
++        /* Neon Drive: a UTF-8 BOM right before the first path */
++        fputs("\xEF\xBB\xBF/Internal/Music/99 Lights.flac\n", f);
 +        fclose(f);
 +        f = fopen(".work/Internal/Playlists/notes.txt", "w");
 +        fputs("x", f);
@@ -22250,7 +22456,7 @@ index 0000000..41ff6ae
 +    return s_failures != 0;
 +}
 diff --git a/firmware/startup/ap_ui.c b/firmware/startup/ap_ui.c
-index 5b4a477..319a5f1 100644
+index 5b4a477..619ae92 100644
 --- a/firmware/startup/ap_ui.c
 +++ b/firmware/startup/ap_ui.c
 @@ -41,10 +41,12 @@
@@ -22266,7 +22472,126 @@ index 5b4a477..319a5f1 100644
  #include "player/bfs.h"     /* phase 3: A-side file service for Core B */
  
  /* Debug-only System actions (DAC test + USB CDC console). Off by default:
-@@ -613,11 +615,26 @@ static void update_prompt(void)
+@@ -227,56 +229,96 @@ static void open_library(void)
+     ui_push_screen(&library_screen);
+ }
+ 
++/* Neon Drive: the library screen is redrawn whole each time (the old line()
++ * calls painted over each other: "donelesg..."), long names are cut to fit. */
++static void index_screen(const char *l1, const char *l2)
++{
++    char cut[40];
++
++    display_fill_rect(0, 0, DISPLAY_W - 1, DISPLAY_H - 1, 0x0000);
++    display_draw_text(12, 14, "UPDATING LIBRARY", 0x07FF, 0x0000);
++    display_fill_rect(12, 30, DISPLAY_W - 13, 31, 0xF81F);
++    if (l1 != 0)
++        display_draw_text(12, 50, l1, 0xFFFF, 0x0000);
++    if (l2 != 0) {
++        snprintf(cut, sizeof cut, "%.36s", l2);
++        display_draw_text(12, 70, cut, 0x8410, 0x0000);
++    }
++    if (l1 != 0 && strcmp(l1, "done") != 0 && strcmp(l1, "stopped") != 0 &&
++        strcmp(l1, "failed") != 0)
++        display_draw_text(12, DISPLAY_H - 22, "hold POWER to stop", 0x4208, 0x0000);
++    display_flush_rows(0, DISPLAY_H - 1);
++}
++
+ static int index_progress(uint32_t files, const char *name)
+ {
+     char b[48];
+ 
+-    snprintf(b, sizeof b, "%u files", (unsigned)files);
+-    line(1, b);
+-    line(2, name);
+-    display_flush_rows(0, DISPLAY_H - 1);
++    snprintf(b, sizeof b, "%u files found", (unsigned)files);
++    index_screen(b, name);
+     return keys_power();
+ }
+ 
+ /* "Rebuild index": one full scan into the inactive slot, committed at the
+- * end. An abort or a failure leaves the previous index in place. */
+-static void index_rebuild_run(void)
++ * end. An abort or a failure leaves the previous index in place.
++ * Neon Drive: playback stops first (the player's queue holds index record
++ * numbers, which a rebuild renumbers), the result shows for a moment and the
++ * screen returns by itself; no key press is needed. */
++static void index_rebuild(void)
+ {
+-    char b[48];
+-    int r;
++    char b[48], c[48];
++    int r, i;
+ 
+-    screen("Rebuild index");
+-    line(1, "scanning...");
+-    display_flush_rows(0, DISPLAY_H - 1);
++    if (player_get_state() != PLAYER_STOPPED)
++        (void)player_stop();
++    index_screen("scanning...", 0);
+     r = media_scan_build(index_progress);
+     s_index_cache = 0xFFFFFFFFu;          /* the rebuilt index is the truth */
+     if (r == FS_OK) {
+         uint32_t tracks = 0;
+ 
+-        line(1, "done");
+         if (media_db_open() == FS_OK) {
+             tracks = media_db_count();
+             media_db_close();
+-            snprintf(b, sizeof b, "%u tracks", (unsigned)tracks);
++            snprintf(c, sizeof c, "%u songs ready", (unsigned)tracks);
+         } else {
+-            snprintf(b, sizeof b, "index unreadable");
++            snprintf(c, sizeof c, "index unreadable");
+         }
++        snprintf(b, sizeof b, "done");
+         log_printf("index: rebuild ok, %lu tracks", (unsigned long)tracks);
+     } else {
+         /* The code says where it stopped: -1 begin (scratch/slot), -2 open,
+          * -3 io, -4 unsupported; MEDIA_SCAN_ABORTED is its own value. */
+-        snprintf(b, sizeof b, r == MEDIA_SCAN_ABORTED ? "aborted" : "failed %d", r);
+         log_printf("index: rebuild rc %d (previous index kept)", r);
+-        snprintf(b, sizeof b, r == MEDIA_SCAN_ABORTED ? "aborted" : "failed");
+-        line(1, b);
+-        snprintf(b, sizeof b, "previous index kept");
++        snprintf(b, sizeof b, r == MEDIA_SCAN_ABORTED ? "stopped" : "failed");
++        snprintf(c, sizeof c, "previous library kept");
+     }
+-    line(2, b);
+-    display_flush_rows(0, DISPLAY_H - 1);
+-    while (!keys_power() && keys_adc() >= 1000)   /* wait for a key */
++    index_screen(b, c);
++    while (keys_power())                  /* the abort press ends here */
++        panel_io_delay_ms(1);
++    for (i = 0; i < 1500 && keys_adc() >= 1000; i++)
+         panel_io_delay_ms(1);
+-    while (keys_power() || keys_adc() < 1000)
++    while (keys_adc() < 1000)             /* a key cut the wait short */
+         panel_io_delay_ms(1);
++    input_mock_clear();
++    ui_invalidate_all();
++}
++
++static void index_rebuild_run(void)
++{
++    index_rebuild();
++}
++
++/* Neon Drive: true when a usable library index with songs exists. */
++static int index_has_songs(void)
++{
++    uint32_t n = 0;
++
++    if (media_db_open() == FS_OK) {
++        n = media_db_count();
++        media_db_close();
++    }
++    return n > 0;
+ }
+ 
+ /* Root menu row: how many tracks the current index holds. Opening the index is
+@@ -613,11 +655,26 @@ static void update_prompt(void)
      power_off();
  }
  
@@ -22294,7 +22619,7 @@ index 5b4a477..319a5f1 100644
      display_clear(0x0000);
      display_flush_rows(0, DISPLAY_H - 1);
      backlight_off();     /* else the panel keeps glowing over a black screen */
-@@ -708,11 +725,10 @@ static void usb_session(void)
+@@ -708,11 +765,10 @@ static void usb_session(void)
  
      usb_power_reset();
  
@@ -22308,7 +22633,7 @@ index 5b4a477..319a5f1 100644
      snprintf(s_usb, sizeof s_usb, "x%d r%uM w%uM", r, (unsigned)(rd >> 11), (unsigned)(wr >> 11));
      /* Session forensics: how it ended and which SCSI opcode/LUN was last on
       * the wire. When a host-side tool misbehaves (Nautilus freezing on
-@@ -735,6 +751,10 @@ static void usb_session(void)
+@@ -735,6 +791,10 @@ static void usb_session(void)
              resume_poll(ap_ms(), 1);  /* persist the last position first */
              settings_screen_store();
              (void)log_flush("power");
@@ -22319,19 +22644,33 @@ index 5b4a477..319a5f1 100644
              power_off();              /* may return on VBUS (park) */
          }
          while (keys_power())          /* don't leak the exit press */
-@@ -1175,6 +1195,11 @@ static void cdc_overlay_run(void)
+@@ -747,6 +807,13 @@ static void usb_session(void)
+         if (!powered_off) {
+             log_printf("usb: exit %d, scanning for an update", r);
+             update_prompt();
++            /* Neon Drive: the PC wrote to the player (new songs, deleted
++             * songs, playlists): refresh the library by itself. */
++            if (wr > 0u) {
++                log_printf("usb: %lu sectors written, rebuilding library",
++                           (unsigned long)wr);
++                index_rebuild();
++            }
+         }
+     }
+     ui_invalidate_all();
+@@ -1175,6 +1242,11 @@ static void cdc_overlay_run(void)
  }
  #endif
  
 +static const char *fw_text(void)
 +{
-+    return "Neon Drive 4";
++    return "Neon Drive 5";
 +}
 +
  /* ---- System: the explicit diagnostic view (BRNOMT-72) -------------------- */
  /* Everything that used to clutter the root menu (hardware probes, USB console,
   * index maintenance) lives here. Same list mechanics as every other menu, but
-@@ -1188,13 +1213,17 @@ static const menu_item_t k_sys_items[] = {
+@@ -1188,13 +1260,18 @@ static const menu_item_t k_sys_items[] = {
  #if AP_CDC_OVERLAY
      { "CDC overlay",   NULL,       cdc_overlay_run },
  #endif
@@ -22341,6 +22680,7 @@ index 5b4a477..319a5f1 100644
 +    { "File browser",  NULL,       open_files },         /* Neon Drive */
 +    { "All settings",  NULL,       open_settings },      /* Neon Drive */
 +    { "USB storage",   NULL,       usb_storage_entry },  /* Neon Drive */
++    { "USB DAC",       NULL,       usb_dac_entry },      /* Neon Drive */
 +    { "Library",       index_text, NULL },
      { "Keys",          keys_text,  NULL },
      { "eMMC",          emmc_text,  NULL },
@@ -22351,7 +22691,28 @@ index 5b4a477..319a5f1 100644
  };
  #define SYS_ITEM_COUNT ((int)(sizeof k_sys_items / sizeof k_sys_items[0]))
  
-@@ -1619,6 +1648,126 @@ static void vol_nav_apply(input_event_t *ev)
+@@ -1350,7 +1427,7 @@ static void resume_poll(unsigned now, int force)
+         } else if (pos != s_res.pos_ms) {
+             /* While playing: one refresh per RESUME_SAVE_MS. Paused/stopped:
+              * capture the position the moment it changes. */
+-            if (player_get_state() != PLAYER_PLAYING ||
++            if (force || player_get_state() != PLAYER_PLAYING ||
+                 (unsigned long)(now - s_res_saved_ms) >= RESUME_SAVE_MS) {
+                 s_res.pos_ms = pos;
+                 moved = 1;
+@@ -1517,7 +1594,10 @@ static void resume_boot_restore(void)
+          * row stay loaded, so Files opens exactly where the user left off. */
+         log_printf("resume: browser state '%s' row %d", st.folder, st.row);
+     }
+-    if (mode >= 2 && st.track[0] == '/') {
++    /* Neon Drive: "folder" (the default every existing rechord.cfg holds)
++     * restores the last track too - after switching on, NOW PLAYING has the
++     * song, paused at the saved position, like an iPod. */
++    if (mode >= 1 && st.track[0] == '/') {
+         /* Source first: the queue restore opens the first track, and
+          * ReplayGain AUTO needs the album context at that point. */
+         if (st.queue_kind != 0)
+@@ -1619,6 +1699,174 @@ static void vol_nav_apply(input_event_t *ev)
          ev->type = (ev->type == KEY_UP) ? KEY_DOWN : KEY_UP;
  }
  
@@ -22361,6 +22722,54 @@ index 5b4a477..319a5f1 100644
 + * (1) The skin engine calls this pump between sections, so drawing never
 + * starves the decoder; (2) while playing, animation frames are spaced out
 + * and skipped outright when the PCM ring is below a third. */
++/* Neon Drive: one key sample every KEYS_SCAN_MS. Called from the loop AND
++ * from bfs_poll (idle hook), so presses made while the loop is blocked in a
++ * track start or a long draw still reach the input queue. Returns 1 when a
++ * new sample was taken since the loop last asked. */
++static int s_keys_sampled;
++
++static void keys_sample(void)
++{
++    unsigned now = ap_ms();
++
++    if ((unsigned)(now - s_keys_ms) >= KEYS_SCAN_MS) {
++        int adc = 0;
++        int pw = 0;
++
++        if (!s_keys_fallback && keys_scan_take(&adc, &pw)) {
++            s_keys_ms = now;
++            s_key_adc = adc;
++            s_key_power = pw;
++            s_keys_sampled = 1;
++            /* 5 ms samples: 3 samples = 15 ms (unchanged debounce). */
++            input_set_vol_debounce(3);
++            input_scan(s_key_adc, s_key_power);
++        } else if (!s_keys_fallback && keys_scan_failed()) {
++            s_keys_fallback = 1;
++            log_printf("keys: async scan failed, polling fallback");
++        }
++        if (s_keys_fallback) {
++            s_keys_ms = now;
++            s_key_adc = keys_adc();
++            s_key_power = keys_power();
++            s_keys_sampled = 1;
++            input_set_vol_debounce(3);
++            input_scan(s_key_adc, s_key_power);
++        }
++    }
++}
++
++static int keys_service(unsigned now)
++{
++    int got;
++
++    (void)now;
++    keys_sample();
++    got = s_keys_sampled;
++    s_keys_sampled = 0;
++    return got;
++}
++
 +/* Neon Drive: switching on takes a HOLD, like the stock firmware. On battery
 + * a tap that is already released by the time we run (or released within
 + * the next 0.4 s) switches straight back off. With USB power there is no
@@ -22478,7 +22887,7 @@ index 5b4a477..319a5f1 100644
  void ap_ui_loop(void)
  {
      input_event_t ev;
-@@ -1627,10 +1776,12 @@ void ap_ui_loop(void)
+@@ -1627,10 +1875,12 @@ void ap_ui_loop(void)
      player_init();       /* register wav/mp3/flac codecs (registry) */
      player_set_resolver(media_resolve);   /* BRNOMT-90: list index -> path */
      mq_set_pump(player_process);  /* keep audio fed during library scans */
@@ -22491,7 +22900,7 @@ index 5b4a477..319a5f1 100644
      /* Active package: the cfg `theme=` id wins; older configs (no key) fall
       * back to /.rechord/active_theme, then to Mono. Settings reload first
       * because the id lives in rechord.cfg. */
-@@ -1670,6 +1821,7 @@ void ap_ui_loop(void)
+@@ -1670,6 +1920,7 @@ void ap_ui_loop(void)
      s_volume_seen = player_get_volume();
      battery_set_charging(usb_cable());
      battery_poll();      /* BRNOMT-83: seed the gauge before the first draw */
@@ -22499,24 +22908,87 @@ index 5b4a477..319a5f1 100644
      /* Bluetooth: restore the user's choice + remembered devices. The module
       * stays off unless the user enabled it. */
      extras_init();
-@@ -1684,6 +1836,8 @@ void ap_ui_loop(void)
+@@ -1684,6 +1935,9 @@ void ap_ui_loop(void)
       * one that declares home=skin gets the declarative home inserted above it
       * (BACK still reaches Files/USB/System). */
      skin_home_set_actions(open_library, open_player, open_settings);
 +    skin_home_set_more(open_files, open_system);   /* Neon Drive */
++    bfs_set_idle_hook(keys_sample);                /* Neon Drive */
 +    library_screen_set_rebuild(index_rebuild_run); /* Music > Organize */
      settings_screen_set_theme_applied(home_stack_sync);
      home_stack_sync();
      /* BRNOMT-87: the resume restore runs inside the loop, AFTER the first
-@@ -1737,6 +1891,7 @@ void ap_ui_loop(void)
-             }
-         }
+@@ -1711,32 +1965,9 @@ void ap_ui_loop(void)
+          * the converter. If the async sampler ever stops completing, fall back
+          * to the old blocking triple conversion (which also pauses the
+          * sampler's use of the shared ADC). */
+-        if ((unsigned)(now - s_keys_ms) >= KEYS_SCAN_MS) {
+-            int adc = 0;
+-            int pw = 0;
+-
+-            if (!s_keys_fallback && keys_scan_take(&adc, &pw)) {
+-                s_keys_ms = now;
+-                s_key_adc = adc;
+-                s_key_power = pw;
+-                sampled = 1;
+-                /* 5 ms samples: 3 samples = 15 ms (unchanged debounce). */
+-                input_set_vol_debounce(3);
+-                input_scan(s_key_adc, s_key_power);
+-            } else if (!s_keys_fallback && keys_scan_failed()) {
+-                s_keys_fallback = 1;
+-                log_printf("keys: async scan failed, polling fallback");
+-            }
+-            if (s_keys_fallback) {
+-                s_keys_ms = now;
+-                s_key_adc = keys_adc();
+-                s_key_power = keys_power();
+-                sampled = 1;
+-                input_set_vol_debounce(3);
+-                input_scan(s_key_adc, s_key_power);
+-            }
+-        }
++        sampled = keys_service(now);
          cable = usb_cable();
 +        battery_set_charging(cable);       /* Neon Drive: skins show a bolt */
  
          if (sd_present() != s_sd_in) {   /* card inserted / removed */
              s_sd_in = sd_present();
-@@ -1860,6 +2015,10 @@ void ap_ui_loop(void)
+@@ -1755,6 +1986,12 @@ void ap_ui_loop(void)
+                 s_resume_ms = now;
+             } else if ((unsigned)(now - s_resume_ms) >= 50u) {
+                 s_resume_done = 1;
++                /* Neon Drive: no library yet (fresh install, wiped
++                 * index): build it now instead of leaving MUSIC empty. */
++                if (!index_has_songs()) {
++                    log_printf("index: none at boot, building");
++                    index_rebuild();
++                }
+                 resume_boot_restore();
+             }
+         }
+@@ -1821,8 +2058,20 @@ void ap_ui_loop(void)
+             /* Screen off is display-only: transport keys keep working. BACK
+              * would pop Now Playing invisibly and leave the next keys on a
+              * menu, so ignore it until the panel is woken (Power/MENU). */
+-            if (s_screen_off && ev.type == KEY_BACK)
++            if (s_screen_off && ev.type == KEY_BACK) {
++                /* Neon Drive: BACK only wakes a dark panel (it never pops
++                 * the hidden Now Playing) so "nothing happens" never looks
++                 * like a freeze. */
++                if (ev.kind == INPUT_PRESS)
++                    screen_wake();
+                 continue;
++            }
++            /* Neon Drive: transport keys still act while the panel is dark
++             * (pocket use), but they also light it so you see what changed. */
++            if (s_screen_off && ev.kind == INPUT_PRESS &&
++                (ev.type == KEY_SELECT || ev.type == KEY_UP ||
++                 ev.type == KEY_DOWN))
++                screen_wake();
+             /* Screen-off is display-only: keys keep working, but they must
+              * not light the panel. Only a short Power press (or unlocking
+              * Hold / USB insertion) wakes it. */
+@@ -1860,6 +2109,10 @@ void ap_ui_loop(void)
              resume_poll(now, 1);       /* persist the last position first */
              settings_screen_store();
              (void)log_flush("power");
@@ -22527,7 +22999,7 @@ index 5b4a477..319a5f1 100644
              power_off();
          } else if (pev == POWER_EV_SHORT) {
              s_idle_ms = now;
-@@ -1909,11 +2068,54 @@ void ap_ui_loop(void)
+@@ -1909,11 +2162,54 @@ void ap_ui_loop(void)
                  resume_poll(now, 1);      /* persist the position first */
                  settings_screen_store();
                  (void)log_flush("standby");
@@ -22582,7 +23054,7 @@ index 5b4a477..319a5f1 100644
          if (player_get_state() == PLAYER_PLAYING)
              s_idle_ms = now;
  
-@@ -1977,8 +2179,7 @@ void ap_ui_loop(void)
+@@ -1977,8 +2273,7 @@ void ap_ui_loop(void)
              if (theme_layout()->home == THEME_HOME_SKIN &&
                  ui_top_screen() == &skin_home_screen &&
                  theme_skin_animated() &&
@@ -22592,7 +23064,7 @@ index 5b4a477..319a5f1 100644
                  unsigned t0 = ap_ms();
                  int drew;
  
-@@ -2001,8 +2202,7 @@ void ap_ui_loop(void)
+@@ -2001,8 +2296,7 @@ void ap_ui_loop(void)
               * Now Playing/Library/Settings/Browser costs nothing per pass. */
              if (theme_ui_active() && ui_top_screen() != &skin_home_screen &&
                  theme_skin_animated() &&
@@ -22604,10 +23076,10 @@ index 5b4a477..319a5f1 100644
                   * static/dynamic split (no art re-stream, small flush). */
 diff --git a/firmware/startup/neon_fx.c b/firmware/startup/neon_fx.c
 new file mode 100644
-index 0000000..c361f96
+index 0000000..e31543e
 --- /dev/null
 +++ b/firmware/startup/neon_fx.c
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,353 @@
 +/*
 + * neon_fx.c — Neon Drive boot and power-off animations.
 + *
@@ -22629,6 +23101,7 @@ index 0000000..c361f96
 +
 +#include "neon_fx.h"
 +#include "../drivers/display.h"
++#include "../drivers/panel_io.h"
 +#include "../services/art_pack.h"
 +#include "../theme/theme_runtime.h"
 +#include "../services/rechord_files.h"
@@ -22768,7 +23241,7 @@ index 0000000..c361f96
 +        return;
 +    t0 = now_ms();
 +    while (!neon_boot_frame(now_ms() - t0))
-+        ;
++        panel_io_delay_ms(2);           /* ~60 fps is plenty */
 +}
 +
 +/* ---- power-off: diagonal virus wipe ------------------------------------ */
@@ -22860,7 +23333,7 @@ index 0000000..c361f96
 +    neon_off_begin();
 +    t0 = now_ms();
 +    while (!neon_off_frame(now_ms() - t0))
-+        ;
++        panel_io_delay_ms(2);
 +}
 +
 +/* ---- USB drive mode / charging screens --------------------------------- */
@@ -24041,10 +24514,10 @@ index c78f588..6152fea 100644
          } else if (s_prof_view.cursor == eq_profile_count()) {
              if (custom_count() > 0) {
 diff --git a/firmware/ui/screens/library_cat_screen.c b/firmware/ui/screens/library_cat_screen.c
-index 43f3fdb..8c734e9 100644
+index 43f3fdb..c42f69b 100644
 --- a/firmware/ui/screens/library_cat_screen.c
 +++ b/firmware/ui/screens/library_cat_screen.c
-@@ -30,7 +30,7 @@ static int cat_rows(void)
+@@ -30,14 +30,19 @@ static int cat_rows(void)
  
  typedef struct {
      int  cat;
@@ -24053,16 +24526,19 @@ index 43f3fdb..8c734e9 100644
      int  cursor;
      int  top;
      char value[24];            /* the chosen name (songs mode) */
-@@ -38,6 +38,8 @@ typedef struct {
++    int  name_cursor;          /* Neon Drive: names-level place, kept for BACK */
++    int  name_top;
+ } cat_state_t;
  
  static cat_state_t s_cat;
  static int s_use_skin;
 +static int s_armed;        /* Neon Drive: PLAY went down on THIS screen */
 +static unsigned s_gen;     /* Neon Drive: mq generation of our live query */
++static int s_follow;       /* Neon Drive: we started playback from this list */
  
  static unsigned cat_total(void);
  static void cat_ensure_visible(unsigned total);
-@@ -116,6 +118,13 @@ static int cat_is_special(int cat)
+@@ -116,6 +121,13 @@ static int cat_is_special(int cat)
  /* (Re)build the current view. Special entries have no names step. */
  static int cat_query_init(void)
  {
@@ -24076,9 +24552,14 @@ index 43f3fdb..8c734e9 100644
      if (!s_cat.mode)
          return mq_names_init(s_cat.cat);
      if (s_cat.cat == MQ_FAVORITES)
-@@ -136,6 +145,18 @@ void library_cat_open(int cat)
+@@ -134,8 +146,24 @@ void library_cat_open(int cat)
+     s_cat.mode = (cat == MQ_ALL || cat_is_special(cat)) ? 1 : 0;
+     s_cat.cursor = 0;
      s_cat.top = 0;
++    s_cat.name_cursor = 0;
++    s_cat.name_top = 0;
      s_cat.value[0] = '\0';
++    s_follow = 0;
      (void)cat_query_init();
 +    s_gen = mq_generation();
 +}
@@ -24090,12 +24571,13 @@ index 43f3fdb..8c734e9 100644
 +    s_cat.mode = 2;
 +    s_cat.cursor = 0;
 +    s_cat.top = 0;
++    s_follow = 0;
 +    snprintf(s_cat.value, sizeof s_cat.value, "%s", query != 0 ? query : "");
 +    s_gen = 0;
  }
  
  static unsigned cat_total(void)
-@@ -145,7 +166,13 @@ static unsigned cat_total(void)
+@@ -145,7 +173,28 @@ static unsigned cat_total(void)
  
  static void cat_on_enter(void)
  {
@@ -24107,10 +24589,25 @@ index 43f3fdb..8c734e9 100644
 +        (void)cat_query_init();
 +        s_gen = mq_generation();
 +    }
++    /* Neon Drive: back from Now Playing, the cursor sits on the song that
++     * is playing now (it may have advanced, or been shuffled to). */
++    if (s_follow && s_cat.mode) {
++        int rec = player_current_record();
++        unsigned n = 0, i;
++        const uint16_t *list = mq_filter_indices(&n);
++
++        if (rec >= 0 && list != 0)
++            for (i = 0; i < n; i++)
++                if (list[i] == (uint16_t)rec) {
++                    s_cat.cursor = (int)i;
++                    cat_ensure_visible(n);
++                    break;
++                }
++    }
      s_use_skin = theme_ui_load(THEME_UI_LIBRARY_CAT);
      s_source.count = (int)cat_total();
      if (s_use_skin)
-@@ -168,7 +195,9 @@ static void cat_draw(void)
+@@ -168,7 +217,9 @@ static void cat_draw(void)
      if (s_use_skin) {
          theme_skin_state_t st;
  
@@ -24121,7 +24618,7 @@ index 43f3fdb..8c734e9 100644
              snprintf(title, sizeof title, "%s / %s",
                       mq_category_name(s_cat.cat), s_cat.value);
          else
-@@ -183,7 +212,9 @@ static void cat_draw(void)
+@@ -183,7 +234,9 @@ static void cat_draw(void)
      display_clear(THEME_COLOR_BG);
      display_fill_rect(0, 0, DISPLAY_W - 1, THEME_TITLE_H - 1,
                        THEME_COLOR_TITLE_BG);
@@ -24132,7 +24629,7 @@ index 43f3fdb..8c734e9 100644
          snprintf(title, sizeof title, "%s / %s",
                   mq_category_name(s_cat.cat), s_cat.value);
      else
-@@ -241,7 +272,8 @@ static void cat_toggle_favorite(void)
+@@ -241,7 +294,8 @@ static void cat_toggle_favorite(void)
      rc = extras_toggle_favorite(full);
      if (rc >= 0)
          log_printf("fav: %s %s", rc ? "added" : "removed", rec.title);
@@ -24142,7 +24639,7 @@ index 43f3fdb..8c734e9 100644
          (void)mq_favorites_init();
          if (s_cat.cursor >= (int)cat_total())
              s_cat.cursor = (int)cat_total() - 1;
-@@ -263,7 +295,8 @@ static void cat_play(int idx)
+@@ -263,16 +317,19 @@ static void cat_play(int idx)
       * shows "i/N" and auto-advances through the rest. The source is set first
       * so ReplayGain AUTO can resolve the first track as album playback. */
      if (s_cat.cat < MQ_COUNT)
@@ -24152,7 +24649,10 @@ index 43f3fdb..8c734e9 100644
      else
          player_set_queue_source(PLAYER_QUEUE_NONE, "", -1);
      {
-@@ -273,6 +306,7 @@ static void cat_play(int idx)
+         int rc = player_play_list(list, (int)n, idx);
++        s_follow = 1;
+ 
+         /* The player copied the indices. Release the media-index handle NOW:
           * keeping it open during playback leaves only one free FS handle, and
           * the gapless pre-open needs two (ring + AP codec) -> "open failed". */
          mq_done();
@@ -24160,7 +24660,7 @@ index 43f3fdb..8c734e9 100644
          if (rc != PLAYER_OK) {
              player_screen_set_status("cannot open track");
              return;
-@@ -315,18 +349,71 @@ static void cat_ensure_visible(unsigned total)
+@@ -315,18 +372,71 @@ static void cat_ensure_visible(unsigned total)
          s_cat.top = ((int)total > rows) ? (int)total - rows : 0;
  }
  
@@ -24238,7 +24738,13 @@ index 43f3fdb..8c734e9 100644
  
      if (s_use_skin) {
          int nav;
-@@ -379,18 +466,21 @@ static void cat_handle_event(const input_event_t *ev)
+@@ -376,21 +486,30 @@ static void cat_handle_event(const input_event_t *ev)
+             if (v == 0)
+                 break;
+             snprintf(s_cat.value, sizeof s_cat.value, "%s", v);
++            s_cat.name_cursor = s_cat.cursor;
++            s_cat.name_top = s_cat.top;
++            s_follow = 0;
              s_cat.mode = 1;
              s_cat.cursor = 0;
              s_cat.top = 0;
@@ -24255,11 +24761,16 @@ index 43f3fdb..8c734e9 100644
              /* back to the names of this category */
              s_cat.mode = 0;
              s_cat.value[0] = '\0';
-             s_cat.cursor = 0;
-             s_cat.top = 0;
+-            s_cat.cursor = 0;
+-            s_cat.top = 0;
 -            (void)mq_names_init(s_cat.cat);
++            s_follow = 0;
 +            (void)cat_query_init();
 +            s_gen = mq_generation();
++            /* Neon Drive: back on the name you opened, not the top. */
++            s_cat.cursor = s_cat.name_cursor;
++            s_cat.top = s_cat.name_top;
++            cat_ensure_visible(cat_total());
              ui_invalidate_all();
          } else {
              ui_pop_screen();
@@ -24559,7 +25070,7 @@ index 2407857..d17cbf6 100644
      }
  
 diff --git a/firmware/ui/screens/player_screen.c b/firmware/ui/screens/player_screen.c
-index df3251e..f2826db 100644
+index df3251e..0c82656 100644
 --- a/firmware/ui/screens/player_screen.c
 +++ b/firmware/ui/screens/player_screen.c
 @@ -102,7 +102,7 @@ static void player_screen_draw(void)
@@ -24571,7 +25082,16 @@ index df3251e..f2826db 100644
          theme_skin_state_t st;
  
          theme_ui_fill_state(&st, "Now playing");
-@@ -235,10 +235,12 @@ static void player_screen_handle_event(const input_event_t *ev)
+@@ -220,6 +220,8 @@ static void player_seek_step(int dir)
+  *                             while the key repeats (the input ladder already
+  *                             accelerates the repeats).
+  *   SELECT           -> play/pause.  BACK -> leave (playback continues). */
++static int s_sel_armed;   /* Neon Drive: PLAY went down on this screen */
++
+ static void player_screen_handle_event(const input_event_t *ev)
+ {
+     int hold = settings_screen_get()->hold_vol;
+@@ -235,10 +237,12 @@ static void player_screen_handle_event(const input_event_t *ev)
  
      switch (ev->type) {
      case KEY_UP:
@@ -24587,7 +25107,7 @@ index df3251e..f2826db 100644
                  s_seek_dir = +1;
                  s_seek_last_ms = ev->now_ms;
                  player_seek_step(s_seek_dir);
-@@ -254,10 +256,12 @@ static void player_screen_handle_event(const input_event_t *ev)
+@@ -254,10 +258,12 @@ static void player_screen_handle_event(const input_event_t *ev)
          }
          break;
      case KEY_DOWN:
@@ -24603,7 +25123,49 @@ index df3251e..f2826db 100644
                  s_seek_dir = -1;
                  s_seek_last_ms = ev->now_ms;
                  player_seek_step(s_seek_dir);
-@@ -327,9 +331,13 @@ static void player_screen_on_enter(void)
+@@ -275,9 +281,21 @@ static void player_screen_handle_event(const input_event_t *ev)
+         }
+         break;
+     case KEY_SELECT:
++        /* Neon Drive: play/pause acts on RELEASE so holding PLAY to mark a
++         * favorite no longer pauses the song first; only a press that went
++         * down on this screen counts (the press that opened Now Playing from
++         * a menu must not toggle it on its release). */
++        if (ev->kind == INPUT_PRESS) {
++            s_sel_armed = 1;
++            break;
++        }
++        if (!s_sel_armed)
++            break;
+         if (ev->kind == INPUT_LONG) {
+             track_info_t ti;
+ 
++            s_sel_armed = 0;
++
+             if (player_get_track(&ti) == PLAYER_OK && ti.path[0] != '\0') {
+                 int rc = extras_toggle_favorite(ti.path);
+ 
+@@ -288,7 +306,10 @@ static void player_screen_handle_event(const input_event_t *ev)
+             }
+             break;
+         }
+-        if (ev->kind != INPUT_PRESS)
++        if (ev->kind != INPUT_RELEASE)
++            break;
++        s_sel_armed = 0;
++        if (ev->long_press)
+             break;
+         if (s_status[0])
+             break;                        /* error view: inert (BACK leaves) */
+@@ -315,6 +336,7 @@ static void player_screen_on_enter(void)
+     track_info_t ti;
+ 
+     s_active = 1;
++    s_sel_armed = 0;
+     s_skin_checked = 0;
+     s_seek_dir = 0;
+     /* Keep a real error view (unsupported file, no renderer), but a stale
+@@ -327,9 +349,13 @@ static void player_screen_on_enter(void)
          return;
      }
      if (player_get_track(&ti) != PLAYER_OK) {
@@ -24619,7 +25181,7 @@ index df3251e..f2826db 100644
          return;
      }
      set_no_track(0);
-@@ -491,8 +499,7 @@ void player_screen_refresh(void)
+@@ -491,8 +517,7 @@ void player_screen_refresh(void)
      int old_playing;
  
      if (player_get_track(&ti) != PLAYER_OK) {
@@ -24630,7 +25192,7 @@ index df3251e..f2826db 100644
      }
      if (s_no_track) {
 diff --git a/firmware/ui/screens/quick_screen.c b/firmware/ui/screens/quick_screen.c
-index 33e7e3a..f46315c 100644
+index 33e7e3a..bf10476 100644
 --- a/firmware/ui/screens/quick_screen.c
 +++ b/firmware/ui/screens/quick_screen.c
 @@ -18,6 +18,7 @@
@@ -24709,6 +25271,22 @@ index 33e7e3a..f46315c 100644
  };
  
  static menu_view_t s_quick_view;
+@@ -174,8 +224,13 @@ static void playlist_handle_event(const input_event_t *ev)
+     case KEY_SELECT:
+         if (n > 0 && s_playlist_view.cursor >= 0 &&
+             s_playlist_view.cursor < n &&
+-            player_play_at(s_playlist_view.cursor) == PLAYER_OK)
+-            ui_pop_screen();           /* back to Quick settings */
++            player_play_at(s_playlist_view.cursor) == PLAYER_OK) {
++            /* Neon Drive: a song was picked, so close the whole overlay and
++             * show what you were on (usually Now Playing). */
++            ui_pop_screen();
++            if (ui_top_screen() == &quick_screen)
++                ui_pop_screen();
++        }
+         break;
+     case KEY_BACK:
+         ui_pop_screen();
 diff --git a/firmware/ui/screens/screens.h b/firmware/ui/screens/screens.h
 index f18ae4b..693a6d4 100644
 --- a/firmware/ui/screens/screens.h
@@ -24969,7 +25547,7 @@ index 0000000..63e7db0
 +    0,
 +};
 diff --git a/firmware/ui/screens/settings_screen.c b/firmware/ui/screens/settings_screen.c
-index bb38f82..b502099 100644
+index bb38f82..9069b20 100644
 --- a/firmware/ui/screens/settings_screen.c
 +++ b/firmware/ui/screens/settings_screen.c
 @@ -239,7 +239,7 @@ typedef struct {
@@ -24981,8 +25559,28 @@ index bb38f82..b502099 100644
      { "Shuffle", "shuffle", GROUP_KEY },
      { "Repeat",  "repeat_mode", GROUP_KEY },
      { "Resume",  "resume", GROUP_KEY },
+@@ -511,7 +511,10 @@ const ui_screen_t settings_screen = {
+ static void settings_group_on_enter(void)
+ {
+     build_group_items();
+-    menu_view_init(&s_group_view);
++    /* Neon Drive: the cursor is reset in open_group(); coming BACK from a
++     * sub-screen (Controls, Bluetooth, EQ, theme) keeps your place. */
++    if (s_group_view.cursor >= s_group_model.item_count)
++        menu_view_init(&s_group_view);
+     s_list_items = s_group_items;
+     s_list_count = s_group_model.item_count;
+     s_use_skin = theme_ui_load(THEME_UI_SETTINGS);
+@@ -606,6 +609,7 @@ static const ui_screen_t settings_group_screen = {
+ static void open_group(int group)
+ {
+     s_group = group;
++    menu_view_init(&s_group_view);
+     ui_push_screen(&settings_group_screen);
+ }
+ 
 diff --git a/firmware/ui/screens/skin_screen.c b/firmware/ui/screens/skin_screen.c
-index 9a9f87e..7668226 100644
+index 9a9f87e..f55890b 100644
 --- a/firmware/ui/screens/skin_screen.c
 +++ b/firmware/ui/screens/skin_screen.c
 @@ -21,6 +21,16 @@ static void (*s_open_lib)(void);
@@ -25002,7 +25600,18 @@ index 9a9f87e..7668226 100644
  void skin_home_set_actions(void (*library)(void),
                             void (*player)(void),
                             void (*settings)(void))
-@@ -107,6 +117,14 @@ static void skin_handle_event(const input_event_t *ev)
+@@ -93,7 +103,9 @@ static void skin_handle_event(const input_event_t *ev)
+         break;
+     }
+     case THEME_SKIN_BACK:
+-        ui_pop_screen();
++        /* Neon Drive: the themed home is the top of the device. BACK used
++         * to drop into the bare classic menu, which looked like the theme
++         * had crashed; everything that menu offers is under SYSTEM. */
+         break;
+     case THEME_SKIN_LIBRARY:
+         if (s_open_lib)
+@@ -107,6 +119,14 @@ static void skin_handle_event(const input_event_t *ev)
          if (s_open_set)
              s_open_set();
          break;
@@ -25175,10 +25784,18 @@ index 9018b1d..128ef0f 100644
  const char *eq_profile_entry_name(int index)
  {
 diff --git a/firmware/ui/tests/mock_services.c b/firmware/ui/tests/mock_services.c
-index a26721c..b4c3a50 100644
+index a26721c..c4ffab9 100644
 --- a/firmware/ui/tests/mock_services.c
 +++ b/firmware/ui/tests/mock_services.c
-@@ -767,3 +767,18 @@ int ipc_b_ring_window(const volatile int32_t **ring, uint32_t *rd,
+@@ -531,6 +531,7 @@ int player_list_count(void)
+     return 0;
+ }
+ 
++int player_current_record(void) { return -1; }
+ int player_list_position(void)
+ {
+     return -1;
+@@ -767,3 +768,18 @@ int ipc_b_ring_window(const volatile int32_t **ring, uint32_t *rd,
      (void)ring; (void)rd; (void)mask; (void)frames;
      return 0;
  }
@@ -25335,8 +25952,109 @@ index cd29052..8edec91 100644
  
      theme_layout_reset();
  }
+diff --git a/firmware/ui/tests/test_player_resume.c b/firmware/ui/tests/test_player_resume.c
+index e90c9c5..615d184 100644
+--- a/firmware/ui/tests/test_player_resume.c
++++ b/firmware/ui/tests/test_player_resume.c
+@@ -55,6 +55,19 @@ void test_player_resume(void)
+     /* SELECT is no longer blocked by the stale error view: it resumes. */
+     e = ev(KEY_SELECT);
+     ui_handle_event(&e);
++    CHECK_EQ_INT(mock_player_play_count(), 0);   /* Neon Drive: on RELEASE */
++    e.kind = INPUT_RELEASE;
++    ui_handle_event(&e);
++    CHECK_EQ_INT(mock_player_play_count(), 1);
++
++    /* Holding PLAY (favorite) must not toggle play/pause. */
++    e = ev(KEY_SELECT);
++    ui_handle_event(&e);
++    e.kind = INPUT_LONG;
++    ui_handle_event(&e);
++    e.kind = INPUT_RELEASE;
++    e.long_press = 1;
++    ui_handle_event(&e);
+     CHECK_EQ_INT(mock_player_play_count(), 1);
+ 
+     e = ev(KEY_BACK);
+diff --git a/firmware/ui/tests/test_screen_stack.c b/firmware/ui/tests/test_screen_stack.c
+index df6cbcd..495f696 100644
+--- a/firmware/ui/tests/test_screen_stack.c
++++ b/firmware/ui/tests/test_screen_stack.c
+@@ -55,34 +55,46 @@ void test_screen_stack(void)
+     CHECK_EQ_INT(s_enter[0], 2);
+     CHECK_EQ_INT(s_exit[0], 0);
+ 
+-    /* stack overflow: depth capped at UI_STACK_MAX (6) */
+-    CHECK(ui_push_screen(&screen_b));
+-    CHECK(ui_push_screen(&screen_c));
+-    CHECK(ui_push_screen(&screen_a));
+-    CHECK(ui_push_screen(&screen_b));
+-    CHECK(ui_push_screen(&screen_c));
+-    CHECK_EQ_INT(ui_stack_depth(), UI_STACK_MAX);
+-    CHECK(!ui_push_screen(&screen_a));       /* full: refused */
+-    CHECK_EQ_INT(ui_stack_depth(), UI_STACK_MAX);
+-    CHECK(ui_top_screen() == &screen_c);
++    /* stack overflow: depth capped at UI_STACK_MAX. Push B, C, A, B, ... on
++     * top of A until full, counting what each screen should see. */
++    {
++        const ui_screen_t *cyc[3] = { &screen_b, &screen_c, &screen_a };
++        int stack_id[UI_STACK_MAX];
++        int want_enter[3], want_exit[3], k, d;
+ 
+-    /* drain */
+-    while (ui_stack_depth() > 0)
+-        CHECK(ui_pop_screen());
+-    CHECK_EQ_INT(ui_stack_depth(), 0);
+-    CHECK(ui_top_screen() == NULL);
+-    CHECK(!ui_pop_screen());
++        for (k = 0; k < 3; k++) {
++            want_enter[k] = s_enter[k];
++            want_exit[k] = s_exit[k];
++        }
++        stack_id[0] = 0;                         /* A is at the bottom */
++        for (d = 1; d < UI_STACK_MAX; d++) {
++            int id = (d - 1) % 3 == 2 ? 0 : (d - 1) % 3 + 1;
++
++            CHECK(ui_push_screen(cyc[(d - 1) % 3]));
++            stack_id[d] = id;
++            want_enter[id]++;
++        }
++        CHECK_EQ_INT(ui_stack_depth(), UI_STACK_MAX);
++        CHECK(!ui_push_screen(&screen_a));       /* full: refused */
++        CHECK_EQ_INT(ui_stack_depth(), UI_STACK_MAX);
++        CHECK(ui_top_screen() == cyc[(UI_STACK_MAX - 2) % 3]);
+ 
+-    /* every screen left the stack exactly as often as it was pushed
+-     * (re-enter on pop of the covering screen adds enters on purpose):
+-     * A pushed 2x, B pushed 3x, C pushed 2x */
+-    CHECK_EQ_INT(s_exit[0], 2);
+-    CHECK_EQ_INT(s_exit[1], 3);
+-    CHECK_EQ_INT(s_exit[2], 2);
+-    /* enters = pushes + re-enters: A 2+3, B 3+2, C 2+1 */
+-    CHECK_EQ_INT(s_enter[0], 5);
+-    CHECK_EQ_INT(s_enter[1], 5);
+-    CHECK_EQ_INT(s_enter[2], 3);
++        /* drain: every pop exits the top and re-enters the one beneath */
++        for (d = UI_STACK_MAX - 1; d >= 0; d--) {
++            want_exit[stack_id[d]]++;
++            if (d > 0)
++                want_enter[stack_id[d - 1]]++;
++        }
++        while (ui_stack_depth() > 0)
++            CHECK(ui_pop_screen());
++        CHECK_EQ_INT(ui_stack_depth(), 0);
++        CHECK(ui_top_screen() == NULL);
++        CHECK(!ui_pop_screen());
++        for (k = 0; k < 3; k++) {
++            CHECK_EQ_INT(s_exit[k], want_exit[k]);
++            CHECK_EQ_INT(s_enter[k], want_enter[k]);
++        }
++    }
+ 
+     /* BRNOMT-69: replace a covered screen without disturbing the top one
+      * (the theme picker swaps the home renderer under open Settings). */
 diff --git a/firmware/ui/tests/test_settings_keys.c b/firmware/ui/tests/test_settings_keys.c
-index 8817249..cfd3614 100644
+index 8817249..c30c9a3 100644
 --- a/firmware/ui/tests/test_settings_keys.c
 +++ b/firmware/ui/tests/test_settings_keys.c
 @@ -237,34 +237,33 @@ static void test_settings_screen_binding(void)
@@ -25397,7 +26115,22 @@ index 8817249..cfd3614 100644
      e = ev(KEY_SELECT); ui_handle_event(&e);
      CHECK_EQ_INT(settings_screen_get()->replaygain_mode, 0);
      CHECK_EQ_INT(mock_player_replaygain_mode(), 0);
-@@ -423,6 +422,15 @@ static void test_quick_screen(void)
+@@ -331,11 +330,9 @@ static void test_settings_screen_binding(void)
+     e = ev(KEY_BACK); ui_handle_event(&e);            /* Controls -> Interface */
+     CHECK_EQ_INT(ui_stack_depth(), 2);
+ 
+-    /* The Bluetooth row opens its screen (the policy is mocked). The group
+-     * view restarts at the top when it is revealed again. */
+-    e = ev(KEY_DOWN); ui_handle_event(&e);
+-    e = ev(KEY_DOWN); ui_handle_event(&e);
+-    e = ev(KEY_DOWN); ui_handle_event(&e);
++    /* The Bluetooth row opens its screen (the policy is mocked). Neon
++     * Drive: the group view keeps its place (Controls) when revealed. */
++    CHECK_EQ_INT(settings_group_view()->cursor, 3);
+     e = ev(KEY_DOWN); ui_handle_event(&e);
+     CHECK_EQ_INT(settings_group_view()->cursor, 4);
+     e = ev(KEY_SELECT); ui_handle_event(&e);
+@@ -423,6 +420,15 @@ static void test_quick_screen(void)
      e = ev(KEY_SELECT); ui_handle_event(&e);          /* off -> all */
      CHECK_EQ_INT(settings_screen_get()->repeat_mode, 1);
  
@@ -25413,6 +26146,34 @@ index 8817249..cfd3614 100644
      e = ev(KEY_DOWN); ui_handle_event(&e);            /* Playlist */
      e = ev(KEY_SELECT); ui_handle_event(&e);
      CHECK(ui_top_screen() == &quick_playlist_screen);
+diff --git a/firmware/ui/tests/test_skin_home.c b/firmware/ui/tests/test_skin_home.c
+index 2d82262..be413d2 100644
+--- a/firmware/ui/tests/test_skin_home.c
++++ b/firmware/ui/tests/test_skin_home.c
+@@ -172,8 +172,8 @@ void test_skin_home(void)
+     }
+     {
+         input_event_t e = key(KEY_BACK);
+-        ui_handle_event(&e);
+-        CHECK_EQ_INT(ui_stack_depth(), 0);
++        ui_handle_event(&e);            /* Neon Drive: the home stays */
++        CHECK_EQ_INT(ui_stack_depth(), 1);
+     }
+ 
+     /* The real package from the repo: theme.cfg + home.skin + assets, with
+diff --git a/firmware/ui/ui.h b/firmware/ui/ui.h
+index 55d4e39..d8bfd18 100644
+--- a/firmware/ui/ui.h
++++ b/firmware/ui/ui.h
+@@ -23,7 +23,7 @@
+ #include "internal/hal.h"   /* input_event_t (services input contract) */
+ 
+ #define RECHORD_UI_VERSION "0.1.0"
+-#define UI_STACK_MAX       6
++#define UI_STACK_MAX       10   /* Neon Drive: was 6 (Music > list > Now Playing > MENU > queue overflowed) */
+ 
+ /* Screen vtable.  All hooks are optional (NULL-safe). */
+ typedef struct ui_screen {
 diff --git a/firmware/ui/ui.mk b/firmware/ui/ui.mk
 index 3ab222d..5b0617b 100644
 --- a/firmware/ui/ui.mk

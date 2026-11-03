@@ -1,0 +1,17 @@
+wait 9000
+press SEL
+wait 600
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+press UP
+press SEL
+wait 6000
+press BACK
+wait 500
+press UP
+press UP
+press UP

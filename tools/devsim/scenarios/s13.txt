@@ -1,0 +1,41 @@
+wait 12000
+mark S13 seek: Controls Hold VOL = Seek, play the 60 s Long Ride, hold VOL+ 2 s, hold VOL- 1.2 s
+press DOWN
+press DOWN
+press SEL
+wait 500
+press DOWN
+press SEL
+wait 500
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+press DOWN
+press SEL
+press BACK
+press BACK
+press BACK
+wait 500
+press SEL
+wait 500
+press DOWN
+press SEL
+wait 800
+press DOWN
+press SEL
+listen 3000
+mark hold VOL+ 2 s
+hold UP 2000
+listen 3000
+mark hold VOL- 1.2 s
+hold DOWN 1200
+listen 6000
+mark pause, seek while paused, resume
+press SEL
+wait 500
+hold UP 800
+wait 500
+press SEL
+listen 3000

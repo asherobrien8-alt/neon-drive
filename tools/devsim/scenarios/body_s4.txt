@@ -1,0 +1,45 @@
+mark S4 repeat ONE (MENU > Repeat x2): the same song must restart
+press SEL
+wait 1500
+press MENU
+wait 400
+press DOWN
+press SEL
+press SEL
+shot repeat_one
+press BACK
+wait 400
+press SEL
+listen 20000
+mark repeat ALL from the last song of All Songs: must wrap to the first
+press MENU
+wait 400
+press DOWN
+press SEL
+press SEL
+wait 300
+press BACK
+wait 300
+press BACK
+wait 500
+press UP
+press SEL
+listen 14000
+mark repeat OFF at the end of the list: stops cleanly
+press MENU
+wait 400
+press DOWN
+press SEL
+press SEL
+wait 300
+press BACK
+wait 300
+press BACK
+wait 500
+press BACK
+wait 500
+press SEL
+wait 800
+press UP
+press SEL
+listen 12000

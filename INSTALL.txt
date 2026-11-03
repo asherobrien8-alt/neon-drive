@@ -24,15 +24,17 @@ STEP 2 - THEME
  3. Eject, unplug. The theme loads on the next start.
 
 STEP 3 - FIRST START
- 1. On the home screen go to MUSIC -> Organize -> Rebuild library.
-    (Do this again whenever you add new music or playlists.)
- 2. Put the microSD card back in.
+ 1. The first start builds the music library by itself ("UPDATING LIBRARY").
+    It does it again every time you copy music over USB and unplug.
+ 2. Put the microSD card back in. If you put new music on the card with a
+    card reader: MUSIC -> Organize -> Rebuild library.
 
 CONTROLS
  VOL + / -        move up / down, change volume on Now Playing
  PLAY             open / select
  hold PLAY        A-Z jump in any long list (artists, albums, songs)
- BACK             go back (on the home screen: the full menu)
+ BACK             go back (the full menu is under SYSTEM)
+ hold VOL + / -   on Now Playing: next / previous song
  MENU             quick settings (shuffle, repeat, cover art, sleep timer)
  hold POWER       switch on (a quick tap does nothing) / power-off animation, then off
  Search           MUSIC -> Search. VOL picks a letter, PLAY adds it,
@@ -41,7 +43,7 @@ CONTROLS
 PLAYLISTS
  Put .m3u / .m3u8 playlist files in a folder called "Playlists" at the top of
  the player. Songs stay in Music (one copy each); the playlist just points at
- them. Then MUSIC -> Organize -> Rebuild library. They show up in
+ them. Copied over USB they appear by themselves. They show up in
  MUSIC -> Playlists, together with Favorites and every music folder on the
  SD card (each folder is its own playlist automatically).
  Hold PLAY on a song inside an album or playlist to add it to Favorites.

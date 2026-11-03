@@ -1,0 +1,26 @@
+mark S1: rebuild library, MUSIC > All Songs > first song, let it run on
+wait 9000
+press SEL
+wait 600
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+press UP
+press SEL
+wait 6000
+shot rebuilt
+press BACK
+wait 500
+press UP
+press UP
+press UP
+press SEL
+wait 1500
+shot allsongs
+press SEL
+wait 500
+listen 30000
+shot np

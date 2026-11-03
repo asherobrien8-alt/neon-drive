@@ -2,6 +2,7 @@
 
 A full retrowave / cyberpunk makeover for the FiiO Snowsky **Echo Mini**:
 
+- **Neon Drive 5 (music that just works).** MP3s with a normal LAME/iTunes header played silence (Core B threw the whole song away as "encoder delay"): fixed, which is what made songs look like they only played after a power cycle. Songs keep playing one after another, across MP3/FLAC/WAV and sample-rate changes. Shuffle, repeat one/all/off, the queue (MENU > Playlist), search, playlists (also Windows .m3u8 files with a BOM), favorites, seek, sleep timer and resume were all run through a simulator that executes the real firmware and the real Core B decoder and listens to the audio. Also fixed: seeking clicked on every chunk until the next song; uppercase `.MP3` failed; the queue screen would not open from Now Playing; resume restarted the song from 0:00; holding PLAY to add a favorite paused the song; key presses during a song change were lost; BACK on the home screen dropped into the plain debug menu. The library now **builds itself** on first boot and after you copy music over USB, a dark screen wakes on any key, and lists remember where you were.
 - **Neon Drive 4 (playback repair).** Rebased on the latest ReChord (its player fixes for skips, format changes and the DAC unmute), Core B kept awake longer instead of being shut down 3 s after every stop, and a self-repair: a song that will not start gets one retry on a freshly restarted decoder core + DAC, then the list moves on; a "playing" state with a frozen audio clock or a muted DAC is fixed on its own. MP3s are found even behind junk or broken tags; MP4/WebM files renamed to .mp3 are recognised (and skipped). Switching on is a hold again. `firmware/coreb-emu/` runs the real Core B image in an emulator to check these flows.
 - **Music that actually plays.** MP3s used to stutter and crawl: the decoder Core B used (minimp3) is floating point, and the Echo Mini's second core has no FPU, so every MP3 needed ~170 MIPS it doesn't have (and the old adapter also dropped frames). Neon Drive swaps in **libmad**, a fixed-point decoder: about **16 MIPS** for the same file, 10x less. FLAC and WAV were already fine.
 - **Volume that does something.** The DAC tops out at 0 dB, but the old range kept counting up to +20 dB with no change in sound. The range is now 60 real steps, and the runner covers it exactly.
@@ -77,7 +78,7 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 
 **Step 3: first boot**
 
-1. On the home screen pick **MUSIC → Organize → Rebuild library** so the library finds your songs (do this again whenever you add music or playlists).
+1. The first boot builds the music library by itself (a short "UPDATING LIBRARY" screen). It does that again every time you copy music over USB. If you ever change the SD card, pick **MUSIC → Organize → Rebuild library**.
 2. Put the microSD card back.
 
 ### Controls
@@ -86,11 +87,11 @@ Neon Drive runs on **ReChord**, a community-built custom firmware for the Echo M
 |---|---|
 | VOL + / − | move up / down through menus · change volume on Now Playing · spin letters in Search |
 | PLAY | open / select · add a letter in Search · play/pause on Now Playing |
-| hold PLAY | A-Z jump in lists · results in Search · add/remove Favorite on a song in an album or playlist |
-| hold VOL + / − on Now Playing | next / previous song |
-| BACK | go back (on the home screen: the classic ReChord menu) |
+| hold PLAY | A-Z jump in lists · results in Search · add/remove Favorite on a song in an album or playlist, or on Now Playing |
+| hold VOL + / − on Now Playing | next / previous song (or seek ±5 s: MUSIC SETUP > Interface > Controls) |
+| BACK | go back (the home screen stays put; the classic menu is under SYSTEM) |
 | MENU button | quick settings: shuffle, repeat, cover art, sleep timer, queue |
-| Power, short press | screen off / on |
+| Power, short press | screen off / on. While the screen is off, VOL and PLAY still work and light it up; BACK just wakes it |
 | Power, hold | power-off animation, then off |
 
 The file browser moved into **SYSTEM** (it's still there, just off the home screen).
@@ -103,7 +104,7 @@ The file browser moved into **SYSTEM** (it's still there, just off the home scre
 2. **Playlist files**: `.m3u` / `.m3u8` (the kind iTunes, MusicBee, foobar2000 or VLC export) in a folder called **`Playlists`** at the top of the player or the SD card. Songs are matched to the copies already on the device, so nothing is duplicated.
 3. **Every music folder**: each folder at the top of the SD card (or inside `SD/Music` / `Music` on the player) becomes a playlist with that folder's name, so music organized in folders shows up with nothing to set up.
 
-After copying music or playlists: **Music > Organize > Rebuild library**.
+Music or playlists copied over USB show up by themselves (the library rebuilds when you unplug). If you filled the SD card in a card reader: **Music > Organize > Rebuild library**.
 
 ### Cover art
 
@@ -136,6 +137,8 @@ art/build_art.py     paints the city + boot scenes -> img/*.565 (raw RGB565)
 tools/previews.sh    re-renders docs/preview with the real engine
 firmware/build.sh    rebuilds HIFIEC90.IMG: ReChord @ pinned commit + neon-drive-engine.patch
 simulator/build.sh   rebuilds simulator/index.html (needs `pip install ziglang==0.13.0`, node)
+tools/devsim/         the real firmware + real Core B on a PC, driven by key scripts, checked by ear (see its README)
+firmware/coreb-emu/  Core B alone in an emulator: open/decode checks on your own files
 ```
 
 The firmware patch (`firmware/neon-drive-engine.patch`) adds to ReChord:

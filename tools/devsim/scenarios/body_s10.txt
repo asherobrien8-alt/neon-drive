@@ -1,0 +1,62 @@
+mark S10a Playlists > Road Trip (m3u8, BOM, mixed paths, one missing) -> expect Turbo, Nightcall, Gloria, ProtoVision
+press UP
+press SEL
+wait 800
+shot s10_pl
+press DOWN
+press DOWN
+press SEL
+wait 800
+shot s10_road
+press SEL
+wait 500
+listen 40000
+mark S10b back x3 (wake, list, playlists) -> Gym Mix (BOM before first path) -> Rampage, Midnight City
+press BACK
+press BACK
+wait 500
+shot s10_w2
+press BACK
+wait 500
+shot s10_w3
+press UP
+press SEL
+wait 800
+shot s10_gym
+press SEL
+wait 500
+listen 19000
+mark S10c folder playlist Kavinsky -> Nightcall, Roadgame, ProtoVision
+press BACK
+wait 500
+shot s10_w4
+press BACK
+wait 500
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 800
+shot s10_kav
+press SEL
+wait 500
+listen 4000
+mark S10d favorite: hold SEL on Now Playing, then Playlists > Favorites
+hold SEL 900
+wait 500
+shot s10_fav_np
+press BACK
+press BACK
+wait 500
+press UP
+press UP
+press UP
+press UP
+press UP
+press SEL
+wait 800
+shot s10_favs
+press SEL
+wait 500
+listen 6000

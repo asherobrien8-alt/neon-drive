@@ -1,0 +1,8 @@
+devsim
+*.o
+*_host.c
+bb_core.bin
+library/
+library_long/
+shots/
+/s*.txt

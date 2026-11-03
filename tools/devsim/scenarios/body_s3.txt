@@ -1,0 +1,31 @@
+mark S3 shuffle on (MENU), play All Songs, let several songs run, skip twice
+press SEL
+wait 1500
+press MENU
+wait 400
+press SEL
+wait 300
+shot quick_shuffle
+press BACK
+wait 400
+press SEL
+listen 30000
+mark next
+hold UP 900
+listen 3000
+mark next
+hold UP 900
+listen 3000
+mark queue view (MENU > Playlist)
+press MENU
+wait 300
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+shot queue
+press BACK
+press BACK
+listen 2000

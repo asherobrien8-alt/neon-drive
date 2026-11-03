@@ -1,0 +1,22 @@
+mark S14 queue: play All Songs, MENU > Playlist, pick the 5th entry -> it plays, overlay closes
+press SEL
+wait 1200
+press SEL
+listen 2000
+press MENU
+wait 400
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+shot s14_queue
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 800
+shot s14_after
+listen 4000

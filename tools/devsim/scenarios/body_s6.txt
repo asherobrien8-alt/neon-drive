@@ -1,0 +1,20 @@
+mark S6 play a song, switch off (hold POWER), switch on, NOW PLAYING, play
+press SEL
+wait 1500
+press DOWN
+press DOWN
+press SEL
+listen 4000
+hold POWER 2500
+wait 6000
+mark back on: home -> NOW PLAYING
+wait 8000
+shot home_after
+press DOWN
+press SEL
+wait 800
+shot np_after
+listen 3000
+mark press PLAY
+press SEL
+listen 12000

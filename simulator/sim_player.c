@@ -213,6 +213,7 @@ int player_play_at(int index)
 }
 int player_list_count(void) { return s_n; }
 int player_list_position(void) { return s_n ? s_pos : -1; }
+int player_current_record(void) { return (s_n && s_pos >= 0 && s_pos < s_n) ? (int)s_q[s_pos] : -1; }
 int player_list_title(int index, char *buf, int cap)
 {
     media_rec_t r;

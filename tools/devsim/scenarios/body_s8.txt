@@ -1,0 +1,28 @@
+mark S8a: play first song, pause, stay paused 3 min, resume
+press SEL
+wait 1500
+press SEL
+listen 2000
+press SEL
+wait 180000
+mark resume after 3 min pause
+press SEL
+listen 4000
+mark S8b: stop at end (repeat off, last song) -> idle 75 s (DAC+B off) -> pick another song
+press BACK
+wait 400
+press UP
+wait 300
+press SEL
+wait 1500
+listen 9000
+wait 75000
+mark pick song after power save
+press BACK
+wait 400
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 1500
+listen 5000

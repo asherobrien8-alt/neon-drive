@@ -1,0 +1,59 @@
+mark S12a headphones pulled while playing -> pause; plug back + PLAY -> plays
+press SEL
+wait 1200
+press SEL
+listen 2000
+jack out
+listen 2000
+jack in
+wait 500
+press SEL
+listen 3000
+mark S12b Controls: Hold VOL = Seek, then hold VOL+ in Now Playing seeks (same song keeps playing)
+press BACK
+press BACK
+press BACK
+wait 500
+press DOWN
+press DOWN
+press SEL
+wait 500
+press DOWN
+press SEL
+wait 500
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+shot s12_controls
+press DOWN
+press SEL
+wait 300
+shot s12_controls2
+press BACK
+press BACK
+press BACK
+wait 500
+press DOWN
+press SEL
+wait 800
+mark hold VOL+ 1.5 s (seek forward)
+listen 1000
+hold UP 1500
+listen 3000
+mark S12c sleep timer with repeat ALL: MENU > Repeat (all), Sleep timer 15 min -> pauses and powers off at ~15 min
+press MENU
+wait 400
+press DOWN
+press SEL
+press DOWN
+press DOWN
+press SEL
+wait 300
+shot s12_sleep
+press BACK
+listen 3000
+wait 1000000
+mark back on after sleep power-off
+listen 3000

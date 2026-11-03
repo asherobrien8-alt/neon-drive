@@ -1,0 +1,29 @@
+mark S11 fresh install: no library index -> builds itself at boot, then MUSIC > All Songs plays
+wait 4000
+shot s11_scan
+wait 8000
+shot s11_home
+press SEL
+wait 600
+press DOWN
+press SEL
+wait 800
+shot s11_all
+press SEL
+listen 4000
+mark manual rebuild from Organize while playing (stops music, returns by itself)
+press BACK
+press BACK
+wait 400
+press DOWN
+press DOWN
+press DOWN
+press SEL
+wait 500
+press UP
+press SEL
+wait 300
+shot s11_rb1
+wait 2500
+shot s11_rb2
+listen 2000

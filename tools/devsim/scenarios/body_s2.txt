@@ -1,0 +1,23 @@
+mark S2 skips: All Songs from the top, next x3 (hold VOL+), previous (hold VOL-)
+press SEL
+wait 1500
+press SEL
+listen 3000
+mark next
+hold UP 900
+listen 3000
+mark next
+hold UP 900
+listen 3000
+mark next
+hold UP 900
+listen 3000
+mark previous
+hold DOWN 900
+listen 3000
+mark pause
+press SEL
+listen 2000
+mark resume
+press SEL
+listen 3000
